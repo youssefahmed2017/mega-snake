@@ -17,8 +17,8 @@ jobs:
             pyinstaller_args: --onefile --windowed
           - os: macos-latest
             artifact_name: MegaSnake-macOS
-            output_path: dist/MegaSnake
-            pyinstaller_args: --onefile
+            output_path: dist/MegaSnake.app.zip
+            pyinstaller_args: --windowed
           - os: ubuntu-latest
             artifact_name: MegaSnake-Linux
             output_path: dist/MegaSnake
@@ -46,6 +46,13 @@ jobs:
 
       - name: Build with PyInstaller
         run: pyinstaller ${{ matrix.pyinstaller_args }} --name MegaSnake main.py
+
+      - name: Zip the .app bundle (macOS)
+        if: matrix.os == 'macos-latest'
+        # ditto (not zip/Compress-Archive) is Apple's recommended way to
+        # archive an .app bundle - it preserves the executable bit, symlinks,
+        # and extended attributes that a plain zip can silently drop.
+        run: ditto -c -k --sequesterRsrc --keepParent dist/MegaSnake.app dist/MegaSnake.app.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
