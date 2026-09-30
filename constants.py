@@ -1,0 +1,202 @@
+"""All tunable constants live here."""
+
+CELL_SIZE = 24
+GRID_W, GRID_H = 32, 22
+SIDEBAR_W = 260
+SCREEN_W = GRID_W * CELL_SIZE + SIDEBAR_W
+SCREEN_H = GRID_H * CELL_SIZE
+FPS = 60
+
+BASE_MOVE_INTERVAL = 0.12  # seconds per grid step at speed 1.0
+
+# Colors
+BG = (14, 16, 22)
+GRID_LINE = (22, 25, 33)
+SIDEBAR_BG = (20, 22, 30)
+TEXT = (235, 235, 245)
+TEXT_DIM = (140, 145, 160)
+ACCENT = (90, 200, 255)
+DANGER = (255, 90, 90)
+GOLD = (255, 210, 80)
+GREEN = (110, 230, 140)
+PURPLE = (190, 120, 255)
+CURSE_COLOR = (170, 0, 110)
+PORTAL_A = (80, 200, 255)
+PORTAL_B = (255, 120, 220)
+P2_COLOR = [(255, 170, 80), (210, 120, 40)]
+
+SNAKE_SKINS = {
+    "Classic": [(110, 230, 140), (70, 180, 110)],
+    "Inferno": [(255, 160, 60), (200, 60, 30)],
+    "Void": [(190, 120, 255), (90, 40, 150)],
+    "Ice": [(140, 220, 255), (60, 140, 220)],
+    "Gold": [(255, 220, 100), (200, 160, 40)],
+}
+
+# Skin -> achievement id required to unlock it. None = always unlocked.
+SKIN_UNLOCK_REQUIREMENT = {
+    "Classic": None,
+    "Inferno": "century",
+    "Void": "combo_15",
+    "Ice": "survivor",
+    "Gold": "half_k",
+}
+
+FOOD_NORMAL = "normal"
+FOOD_GOLDEN = "golden"
+FOOD_SPEED = "speed"
+FOOD_SHRINK = "shrink"
+FOOD_BOMB = "bomb"
+FOOD_CURSE = "curse"
+
+FOOD_WEIGHTS = {
+    FOOD_NORMAL: 56,
+    FOOD_GOLDEN: 10,
+    FOOD_SPEED: 10,
+    FOOD_SHRINK: 8,
+    FOOD_BOMB: 9,
+    FOOD_CURSE: 7,
+}
+
+FOOD_COLORS = {
+    FOOD_NORMAL: (255, 90, 90),
+    FOOD_GOLDEN: GOLD,
+    FOOD_SPEED: (90, 200, 255),
+    FOOD_SHRINK: PURPLE,
+    FOOD_BOMB: (30, 30, 30),
+    FOOD_CURSE: CURSE_COLOR,
+}
+
+POWERUP_GHOST = "ghost"
+POWERUP_MAGNET = "magnet"
+POWERUP_SHIELD = "shield"
+POWERUP_SLOWMO = "slowmo"
+POWERUP_MULT = "mult2x"
+POWERUP_FREEZE = "freeze"
+POWERUP_TELEPORT = "teleport"
+
+POWERUP_COLORS = {
+    POWERUP_GHOST: (200, 220, 255),
+    POWERUP_MAGNET: (255, 140, 200),
+    POWERUP_SHIELD: (120, 255, 190),
+    POWERUP_SLOWMO: (150, 150, 255),
+    POWERUP_MULT: GOLD,
+    POWERUP_FREEZE: (140, 220, 255),
+    POWERUP_TELEPORT: (255, 255, 255),
+}
+
+# Okabe-Ito palette: distinguishable under the common forms of color-vision
+# deficiency. Bomb and curse keep their shape markers (ring / X) as well.
+COLORBLIND_FOOD_COLORS = {
+    FOOD_NORMAL: (213, 94, 0),
+    FOOD_GOLDEN: (240, 228, 66),
+    FOOD_SPEED: (86, 180, 233),
+    FOOD_SHRINK: (204, 121, 167),
+    FOOD_BOMB: (30, 30, 30),
+    FOOD_CURSE: (0, 114, 178),
+}
+
+COLORBLIND_POWERUP_COLORS = {
+    POWERUP_GHOST: (230, 230, 230),
+    POWERUP_MAGNET: (204, 121, 167),
+    POWERUP_SHIELD: (0, 158, 115),
+    POWERUP_SLOWMO: (0, 114, 178),
+    POWERUP_MULT: (240, 228, 66),
+    POWERUP_FREEZE: (86, 180, 233),
+    POWERUP_TELEPORT: (230, 159, 0),
+}
+
+# Durations in seconds. Instant-effect power-ups (teleport) aren't in here.
+POWERUP_DURATIONS = {
+    POWERUP_GHOST: 6.0,
+    POWERUP_MAGNET: 8.0,
+    POWERUP_SHIELD: 12.0,
+    POWERUP_SLOWMO: 5.0,
+    POWERUP_MULT: 10.0,
+    POWERUP_FREEZE: 6.0,
+}
+
+CURSE_DURATION = 4.5
+
+MODES = ["Classic", "Walls", "Maze", "Battle", "Timed", "Hardcore", "Coop", "Daily"]
+
+# wrap: edges wrap instead of killing. powerups: power-ups spawn. obstacles: maze-style
+# growth. rivals: number of AI rival snakes. timer: seconds for a countdown mode (or None).
+# coop: local two-player. seeded: today's date seeds the initial layout.
+MODE_CONFIG = {
+    "Classic": dict(wrap=True, powerups=True, obstacles=False, rivals=0, timer=None, coop=False, seeded=False, speed_mult=1.0),
+    "Walls": dict(wrap=False, powerups=True, obstacles=False, rivals=0, timer=None, coop=False, seeded=False, speed_mult=1.0),
+    "Maze": dict(wrap=False, powerups=True, obstacles=True, rivals=0, timer=None, coop=False, seeded=False, speed_mult=1.0),
+    "Battle": dict(wrap=False, powerups=True, obstacles=False, rivals=2, timer=None, coop=False, seeded=False, speed_mult=1.0),
+    "Timed": dict(wrap=True, powerups=True, obstacles=False, rivals=0, timer=60, coop=False, seeded=False, speed_mult=1.0),
+    "Hardcore": dict(wrap=False, powerups=False, obstacles=True, rivals=0, timer=None, coop=False, seeded=False, speed_mult=1.35),
+    "Coop": dict(wrap=False, powerups=True, obstacles=False, rivals=0, timer=None, coop=True, seeded=False, speed_mult=1.0),
+    "Daily": dict(wrap=False, powerups=True, obstacles=True, rivals=0, timer=None, coop=False, seeded=True, speed_mult=1.0),
+}
+
+MODE_DESC = {
+    "Classic": "Wrap around edges. Pure snake.",
+    "Walls": "Edges kill you. No mercy.",
+    "Maze": "Walls + obstacles that grow over time.",
+    "Battle": "Walls + two AI rivals want your food.",
+    "Timed": "60 second score attack. Wraps around.",
+    "Hardcore": "No power-ups. Faster ramp. One life.",
+    "Coop": "Local 2-player. Arrows + WASD, shared board.",
+    "Daily": "Same seeded layout for everyone, today only.",
+}
+
+DIFFICULTIES = ["Easy", "Normal", "Hard"]
+DIFFICULTY_SPEED_MULT = {"Easy": 0.85, "Normal": 1.0, "Hard": 1.25}
+
+# Purchasable cosmetic trails (coin shop). color=None means no glow override
+# (uses the skin's own color); "rainbow" cycles hue over time.
+TRAIL_EFFECTS = {
+    "None":   {"cost": 0,   "color": None},
+    "Ember":  {"cost": 40,  "color": (255, 120, 40)},
+    "Frost":  {"cost": 40,  "color": (140, 220, 255)},
+    "Toxic":  {"cost": 60,  "color": (140, 255, 90)},
+    "Royal":  {"cost": 80,  "color": (190, 120, 255)},
+    "Rainbow": {"cost": 150, "color": "rainbow"},
+}
+TRAIL_NAMES = list(TRAIL_EFFECTS.keys())
+
+SAVE_DIR_NAME = ".megasnake"
+
+GAME_VERSION = "1.4.0"
+
+GHOST_MAX_TICKS = 5000
+
+CHANGELOG = [
+    ("1.4.0", [
+        "Ghost replay: race a translucent replay of your best run in each mode",
+        "Daily quests: 3 new objectives every day with coin rewards",
+        "How to Play screen with controls, food & power-up reference",
+        "Color-blind mode (Okabe-Ito palette) in Settings",
+        "Announcer callouts, red wall-proximity warning, run-history chart in Stats",
+    ]),
+    ("1.3.0", [
+        "LAN multiplayer: host a match on your local network, no server needed",
+        "The other player joins by typing your LAN IP shown on the Host screen",
+        "Reuses Coop rules over the network - 2 snakes, shared board and score",
+        "Graceful disconnect handling on both the host and client side",
+    ]),
+    ("1.2.0", [
+        "Coin economy: earn coins per run, spend them in the new Shop on trail effects",
+        "Daily play streaks with bonus coins for playing consecutive days",
+        "Arcade-style 3-letter initials entry when you land a high score",
+        "Achievement screen now shows live progress bars, not just checkmarks",
+        "Real-time 'New Personal Best!' banner mid-run when you beat your own record",
+    ]),
+    ("1.1.0", [
+        "Added modes: Timed, Hardcore, Co-op, Daily Challenge",
+        "Battle mode now has 2 rival snakes",
+        "Added portals, Curse food, Freeze & Teleport power-ups",
+        "Settings screen: volume, difficulty, screen shake toggle",
+        "Stats & Changelog screens, itemized post-game score breakdown",
+        "Skins now unlock via achievements",
+        "Visual polish: pulsing body, speed trail glow, zoom punch, sequential death",
+    ]),
+    ("1.0.0", [
+        "Initial release: Classic/Walls/Maze/Battle, power-ups, combos, achievements",
+    ]),
+]

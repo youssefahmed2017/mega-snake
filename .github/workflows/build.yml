@@ -1,0 +1,55 @@
+name: Build cross-platform binaries
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: MegaSnake-Windows
+            output_path: dist/MegaSnake.exe
+            pyinstaller_args: --onefile --windowed
+          - os: macos-latest
+            artifact_name: MegaSnake-macOS
+            output_path: dist/MegaSnake
+            pyinstaller_args: --onefile
+          - os: ubuntu-latest
+            artifact_name: MegaSnake-Linux
+            output_path: dist/MegaSnake
+            pyinstaller_args: --onefile
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Install SDL runtime deps (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 libsdl2-ttf-2.0-0
+
+      - name: Build with PyInstaller
+        run: pyinstaller ${{ matrix.pyinstaller_args }} --name MegaSnake main.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.output_path }}
+          if-no-files-found: error
