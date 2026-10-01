@@ -1575,7 +1575,16 @@ class Game:
         if self.lan_role == "host" and self.lan_link and self.lan_link.connected:
             self.lan_link.send(self._build_snapshot(game_over=True))
 
-        if persistence.would_qualify_for_leaderboard(self.data, self.score):
+        # Letter-by-letter initials entry only makes sense solo: in a LAN/
+        # online match the other player is already sitting at their OWN Game
+        # Over screen (reached independently via the game_over snapshot, not
+        # through this method at all - only the host ever calls it), with no
+        # way to see or take part in this one. Worse, while the host sat here
+        # the link went fully quiet - no snapshots, no heartbeat, nothing
+        # polls it - for however long typing initials took, which was enough
+        # on its own to cause a real "disconnected" after an actual new high
+        # score. So multiplayer always skips straight to Game Over instead.
+        if self.lan_role is None and persistence.would_qualify_for_leaderboard(self.data, self.score):
             self.pending_score_entry = {"score": self.score, "mode": self.mode_name(), "date": today_iso}
             self.pending_initials = ["A", "A", "A"]
             self.initials_cursor = 0
