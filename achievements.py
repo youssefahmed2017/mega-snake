@@ -16,6 +16,9 @@ class Achievement:
     # for binary/event-style achievements (no meaningful "progress").
     stat_key: Optional[str] = None
     target: Optional[float] = None
+    # Hidden achievements show as "???" until unlocked. Ones whose check never
+    # passes (lambda s: False) are unlocked directly by game events instead.
+    hidden: bool = False
 
 
 ACHIEVEMENTS: List[Achievement] = [
@@ -31,6 +34,7 @@ ACHIEVEMENTS: List[Achievement] = [
     Achievement("speed_demon", "Speed Demon", "Reach max speed tier", lambda s: s["speed_tier"] >= 5, "speed_tier", 5),
     Achievement("ghost_walker", "Ghost Walker", "Pass through a wall using Ghost mode", lambda s: s["wall_phases"] >= 1),
     Achievement("survivor", "Survivor", "Survive 3 minutes in one run", lambda s: s["time_alive"] >= 180, "time_alive", 180),
+    Achievement("trespasser", "Trespasser", "Found a place you weren't supposed to be", lambda s: False, hidden=True),
 ]
 
 ACHIEVEMENTS_BY_ID: Dict[str, Achievement] = {a.id: a for a in ACHIEVEMENTS}

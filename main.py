@@ -33,13 +33,13 @@ from constants import (
     PORTAL_A, PORTAL_B, MODES, MODE_CONFIG, MODE_DESC, DIFFICULTIES, DIFFICULTY_SPEED_MULT,
     GAME_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
     LAN_RULESETS, LAN_RULESET_NAMES, MAPS, MAP_NAMES, MAP_THEMES, DEFAULT_THEME,
-    EASTER_MASH_THRESHOLD, EASTER_WARNINGS, SECRET_SHOP_ITEMS,
+    EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS,
 )
 from snake import PlayerSnake
 from enemy import EnemySnake
 from food import Food, PowerUp, spawn_food, maybe_spawn_powerup, maybe_spawn_portal_pair, random_free_cell
 from particles import ParticleSystem
-from achievements import ACHIEVEMENTS, AchievementTracker
+from achievements import ACHIEVEMENTS, ACHIEVEMENTS_BY_ID, AchievementTracker
 from audio import SoundBank
 import persistence
 import network
@@ -172,7 +172,9 @@ class Game:
         self.local_ip: Optional[str] = None
 
         self.easter_down_count = 0
+        self.easter_streak_start = 0
         self.easter_stage = 0
+        self.secret_shop_toast_until = 0
 
         # Auto-updater: checks GitHub Releases on a background thread so the
         # UI never blocks. The startup check is silent on "no update" or a
@@ -1774,9 +1776,10 @@ class Game:
             got = ach.id in unlocked
             color = GREEN if got else TEXT_DIM
             mark = "[x]" if got else "[ ]"
-            name = font_small.render(f"{mark} {ach.name}", True, color)
+            secret = ach.hidden and not got
+            name = font_small.render(f"{mark} {'???' if secret else ach.name}", True, color)
             screen.blit(name, (x, y))
-            desc = font_tiny.render(ach.description, True, TEXT_DIM)
+            desc = font_tiny.render("Hidden achievement" if secret else ach.description, True, TEXT_DIM)
             screen.blit(desc, (x + 14, y + 19))
 
             if ach.stat_key and ach.target:
@@ -2422,18 +2425,37 @@ class Game:
         foot = font_tiny.render("Esc: leave", True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 24))
 
+        if pygame.time.get_ticks() < self.secret_shop_toast_until:
+            ach = ACHIEVEMENTS_BY_ID["trespasser"]
+            head = font_small.render("Achievement Unlocked!", True, GOLD)
+            name_r = font_mid.render(ach.name, True, TEXT)
+            w = max(head.get_width(), name_r.get_width()) + 40
+            box = pygame.Rect(SCREEN_W // 2 - w // 2, SCREEN_H - 120, w, 70)
+            pygame.draw.rect(screen, (16, 14, 22), box, border_radius=10)
+            pygame.draw.rect(screen, GOLD, box, width=2, border_radius=10)
+            screen.blit(head, (SCREEN_W // 2 - head.get_width() // 2, box.y + 8))
+            screen.blit(name_r, (SCREEN_W // 2 - name_r.get_width() // 2, box.y + 32))
+
     # ---------- input ----------
 
     def handle_menu_key(self, key) -> None:
         n = len(MENU_ITEMS)
         # Easter egg: only the literal Down arrow counts (not the WASD "s"
         # alias) - any other key breaks the streak.
+        # The streak has to run all the way to the last item and then
+        # EASTER_EXTRA_PRESSES past it, measured from where it started.
         if key == pygame.K_DOWN:
+            if self.easter_down_count == 0:
+                self.easter_streak_start = self.menu_index
             self.easter_down_count += 1
-            if self.easter_down_count >= EASTER_MASH_THRESHOLD:
+            needed = (n - 1 - self.easter_streak_start) + EASTER_EXTRA_PRESSES
+            if self.easter_down_count >= needed:
                 self.easter_down_count = 0
                 self.easter_stage = 0
-                self.state = STATE_EASTER_WARNING
+                if self.data.get("secret_shop_found"):
+                    self._enter_secret_shop()
+                else:
+                    self.state = STATE_EASTER_WARNING
                 return
         else:
             self.easter_down_count = 0
@@ -2514,7 +2536,7 @@ class Game:
             self.sounds.play(self.sounds.menu_select)
             if self.easter_stage >= len(EASTER_WARNINGS):
                 self.easter_stage = 0
-                self.state = STATE_SECRET_SHOP
+                self._enter_secret_shop()
             if self.screen_shake_enabled:
                 self.particles.shake(0.3, 4 + self.easter_stage * 2)
         else:
@@ -2522,6 +2544,16 @@ class Game:
             self.easter_stage = 0
             self.easter_down_count = 0
             self.state = STATE_MENU
+
+    def _enter_secret_shop(self) -> None:
+        self.state = STATE_SECRET_SHOP
+        self.data["secret_shop_found"] = True
+        if "trespasser" not in self.tracker.unlocked:
+            self.tracker.unlocked.add("trespasser")
+            self.data["achievements"] = sorted(self.tracker.unlocked)
+            self.sounds.play(self.sounds.achievement)
+            self.secret_shop_toast_until = pygame.time.get_ticks() + 3500
+        persistence.save(self.data)
 
     def handle_secret_shop_key(self, key) -> None:
         if key == pygame.K_ESCAPE:

@@ -316,12 +316,13 @@ TRAIL_NAMES = list(TRAIL_EFFECTS.keys())
 
 SAVE_DIR_NAME = ".megasnake"
 
-# Easter egg: mash Down on the main menu. EASTER_MASH_THRESHOLD consecutive
-# presses (any other key resets the count) triggers the first warning; from
-# there, pressing Down again on each warning screen escalates to the next
-# one, and pressing it through all three opens the (purely cosmetic) secret
-# shop. Any other key on a warning screen bails out and resets everything.
-EASTER_MASH_THRESHOLD = 10
+# Easter egg: keep pressing Down on the main menu past the last item. A
+# streak needs (presses to reach the last item from where it started) +
+# EASTER_EXTRA_PRESSES; any other key resets it. That triggers the first
+# warning; Down on each warning escalates, and past the last one opens the
+# (purely cosmetic) secret shop. Any other key on a warning bails out. Once
+# the shop has been found, later streaks skip the warnings.
+EASTER_EXTRA_PRESSES = 10
 
 EASTER_WARNINGS = [
     {
@@ -349,15 +350,19 @@ SECRET_SHOP_ITEMS = [
     ("Developer's Coffee", "1,000,000 coins", "+0% to everything. Tastes bitter."),
     ("Fourth Wall", "NOT FOR SALE", "Already broken, see above."),
     ("Your Sanity", "Already spent", "Refunds not available."),
-    ("Achievement: Curious", "Locked forever", "You'll never actually unlock this."),
+    ("Achievement: Curious", "Locked forever", "You'll never unlock this."),
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.8.1"
+GAME_VERSION = "1.8.2"
 
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.8.2", [
+        "Fixed a few things you probably haven't found yet.",
+        "(One new achievement. Good luck.)",
+    ]),
     ("1.8.1", [
         "Fixed the auto-updater on Windows: the updated game now actually relaunches",
         "(it used to fail with 'Failed to load Python DLL' or hang in the background)",
