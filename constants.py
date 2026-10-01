@@ -354,7 +354,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.8.3"
+GAME_VERSION = "1.8.4"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker). Empty
 # until it's deployed, which hides online play behind a friendly message.
@@ -365,6 +365,11 @@ ONLINE_SERVER_URL = ""
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.8.4", [
+        "Screen shake actually shakes now (it was too weak to notice before)",
+        "Dying pauses on the board for a moment so you see the crash before Game Over",
+        "LAN Multiplayer is now just 'Multiplayer' (online play is coming soon)",
+    ]),
     ("1.8.3", [
         "Fixed 'Check for Updates' failing on macOS with an SSL certificate error",
     ]),

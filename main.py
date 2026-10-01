@@ -88,6 +88,10 @@ STATE_UPDATE_ERROR = "update_error"
 STATE_EASTER_WARNING = "easter_warning"
 STATE_SECRET_SHOP = "secret_shop"
 
+# After the run-ending death, the board stays up this long (frozen, with the
+# screen shake and death particles playing) before the Game Over screen.
+DEATH_PAUSE_SECONDS = 0.9
+
 MENU_ITEMS = [
     "Start Game", "Mode", "Skin", "Multiplayer", "Daily Quests", "Shop", "Settings",
     "How to Play", "Stats", "Leaderboard", "Achievements", "Changelog", "Check for Updates", "Quit",
@@ -588,6 +592,7 @@ class Game:
         self.last_death_reason: Dict[str, str] = {}
 
         self.pending_death_bursts: List[list] = []  # [delay, x, y, color]
+        self.death_pause_timer = 0.0
         self.zoom_timer = 0.0
         self.zoom_duration = 0.18
         self.zoom_mag = 0.07
@@ -692,6 +697,14 @@ class Game:
                 self.particles.update(dt)
                 return
 
+        if self.death_pause_timer > 0:
+            self.death_pause_timer -= dt
+            self._update_death_effects(dt)
+            if self.death_pause_timer <= 0:
+                self.death_pause_timer = 0.0
+                self._finalize_game_over()
+            return
+
         self.time_alive += dt
         self.stats["time_alive"] = self.time_alive
 
@@ -781,11 +794,7 @@ class Game:
         if self.zoom_timer > 0:
             self.zoom_timer = max(0.0, self.zoom_timer - dt)
 
-        for burst in list(self.pending_death_bursts):
-            burst[0] -= dt
-            if burst[0] <= 0:
-                self.particles.burst(burst[1], burst[2], burst[3], count=8, speed=180, life=0.6)
-                self.pending_death_bursts.remove(burst)
+        self._update_death_bursts(dt)
 
         self.stats.update(
             combo=self.combo, length=len(self.player.body), score=self.score,
@@ -832,6 +841,18 @@ class Game:
             if ticked or self.snapshot_accum >= self.lan_link.snapshot_min_gap:
                 self.snapshot_accum = 0.0
                 self.lan_link.send(self._build_snapshot())
+
+    def _update_death_bursts(self, dt: float) -> None:
+        for burst in list(self.pending_death_bursts):
+            burst[0] -= dt
+            if burst[0] <= 0:
+                self.particles.burst(burst[1], burst[2], burst[3], count=8, speed=180, life=0.6)
+                self.pending_death_bursts.remove(burst)
+
+    def _update_death_effects(self, dt: float) -> None:
+        self._update_death_bursts(dt)
+        self.particles.update(dt)
+        self._update_ambient(dt)
 
     def _grow_maze(self) -> None:
         occ = self.occupied_cells()
@@ -1141,14 +1162,14 @@ class Game:
         cfg = self.mode_cfg()
         if not cfg["coop"]:
             self.game_over_reason = reason
-            self._finalize_game_over()
+            self.death_pause_timer = DEATH_PAUSE_SECONDS
             return
 
         if not self.player_alive and not self.player2_alive:
             p1r = self.last_death_reason.get("p1", "-")
             p2r = self.last_death_reason.get("p2", "-")
             self.game_over_reason = f"P1: {p1r}   P2: {p2r}"
-            self._finalize_game_over()
+            self.death_pause_timer = DEATH_PAUSE_SECONDS
 
     def _time_up(self) -> None:
         self.game_over_reason = "Time's up!"
@@ -2829,6 +2850,8 @@ class Game:
             self.initials_cursor = (self.initials_cursor + 1) % 3
 
     def handle_playing_key(self, key) -> None:
+        if self.lan_role != "client" and self.death_pause_timer > 0:
+            return  # the run is over; don't let Esc -> Main Menu skip saving it
         if self.lan_role == "client":
             d = None
             if key in (pygame.K_UP, pygame.K_w):
