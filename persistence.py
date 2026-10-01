@@ -18,7 +18,8 @@ DEFAULT_DATA = {
     "high_scores": [],  # list of {"score": int, "mode": str, "date": str, "initials": str}
     "run_history": [],  # list of {"score": int, "mode": str, "date": str} - last 20 runs, any rank
     "achievements": [],  # list of achievement ids unlocked
-    "secret_shop_found": False,  # once true, the menu easter egg skips its warnings
+    "secret_shop_found": False,
+    "pending_update": None,  # {"from", "to"} while an update relaunch is in flight  # once true, the menu easter egg skips its warnings
     "stat_bests": {},  # stat_key -> best value ever reached, for achievement progress bars
     "games_played": 0,
     "total_food_eaten": 0,

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import datetime
 import os
+import textwrap
 import random
 import sys
 import tempfile
@@ -203,8 +204,15 @@ class Game:
         self.prev_state_before_update = STATE_MENU
 
         self.reset_run()
-        self.update_checker = updater.UpdateChecker(GAME_VERSION)
-        self.state = STATE_UPDATE_CHECK
+        failed_update = self._consume_pending_update()
+        if failed_update:
+            # The last update relaunched this same old version. Offering it
+            # again would just loop forever, so explain instead.
+            self.update_error_msg = failed_update
+            self.state = STATE_UPDATE_ERROR
+        else:
+            self.update_checker = updater.UpdateChecker(GAME_VERSION)
+            self.state = STATE_UPDATE_CHECK
 
     # ---------- helpers ----------
 
@@ -290,6 +298,19 @@ class Game:
         self.update_checker = updater.UpdateChecker(GAME_VERSION)
         self.state = STATE_UPDATE_CHECK
 
+    def _consume_pending_update(self) -> Optional[str]:
+        """Checks how the previous launch's update attempt went (and forgets it).
+        Returns an error message if this is still the version it updated from."""
+        pending = self.data.get("pending_update")
+        if not pending:
+            return None
+        self.data["pending_update"] = None
+        persistence.save(self.data)
+        target = pending.get("to", "")
+        if updater.parse_version(GAME_VERSION) >= updater.parse_version(target):
+            return None
+        return updater.update_failed_message(target)
+
     def _poll_update_check(self, dt: float) -> None:
         self.update_check_anim = min(1.0, self.update_check_anim + dt * 1.6)
         checker = self.update_checker
@@ -310,6 +331,11 @@ class Game:
             self.state = STATE_MENU if silent else STATE_UPDATE_NONE
 
     def _begin_update_download(self) -> None:
+        blocker = updater.preflight_error()
+        if blocker:
+            self.update_error_msg = blocker
+            self.state = STATE_UPDATE_ERROR
+            return
         latest = self.update_releases[-1]
         asset = latest.asset_for_this_platform()
         if asset is None:
@@ -329,9 +355,15 @@ class Game:
             self.update_error_msg = dl.error
             self.state = STATE_UPDATE_ERROR
             return
+        # Remember what we're updating to, so the relaunched game can tell
+        # whether the swap really happened (see _consume_pending_update).
+        self.data["pending_update"] = {"from": GAME_VERSION, "to": self.update_releases[-1].tag}
+        persistence.save(self.data)
         err = updater.apply_update_and_relaunch(dl.dest_path)
         # Only reached if the update could NOT be applied (e.g. a dev build) -
         # on success the process has already exited.
+        self.data["pending_update"] = None
+        persistence.save(self.data)
         self.update_error_msg = err or "Could not apply the update."
         self.state = STATE_UPDATE_ERROR
 
@@ -2523,10 +2555,13 @@ class Game:
         screen.fill(BG)
         t = font_big.render("UPDATE FAILED", True, DANGER)
         screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 180))
-        msg = font_small.render(str(self.update_error_msg), True, TEXT)
-        screen.blit(msg, (SCREEN_W // 2 - msg.get_width() // 2, 240))
+        y = 240
+        for line in textwrap.wrap(str(self.update_error_msg), 80) or [""]:
+            msg = font_small.render(line, True, TEXT)
+            screen.blit(msg, (SCREEN_W // 2 - msg.get_width() // 2, y))
+            y += 24
         hint = font_tiny.render(f"You can always grab it manually from {updater.RELEASES_PAGE}", True, TEXT_DIM)
-        screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, 270))
+        screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, y + 8))
         foot = font_small.render("Enter / Esc: back", True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 40))
 

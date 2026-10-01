@@ -183,6 +183,81 @@ def _find_app_bundle(executable_path: Path) -> Optional[Path]:
     return None
 
 
+MAC_MOVE_TO_APPLICATIONS = (
+    "macOS is running MegaSnake from a temporary read-only copy. Drag MegaSnake.app "
+    "into your Applications folder, open it from there, then update again."
+)
+
+
+def is_translocated(app_path: Path) -> bool:
+    """Gatekeeper "App Translocation": a quarantined app opened straight from
+    its download location actually runs from a randomized read-only mount, so
+    the bundle at sys.executable can't be replaced - an in-place update there
+    silently fails and relaunches the same old version."""
+    return "AppTranslocation" in Path(app_path).parts
+
+
+def _untranslocated_path(app_path: Path) -> Optional[Path]:
+    """Where the translocated app really lives, via the Security framework's
+    SecTranslocateCreateOriginalPathForURL. None if that can't be resolved."""
+    try:
+        import ctypes
+        import ctypes.util
+
+        cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
+        sec = ctypes.cdll.LoadLibrary(ctypes.util.find_library("Security"))
+        cf.CFURLCreateFromFileSystemRepresentation.restype = ctypes.c_void_p
+        cf.CFURLCreateFromFileSystemRepresentation.argtypes = [
+            ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_bool]
+        cf.CFURLGetFileSystemRepresentation.restype = ctypes.c_bool
+        cf.CFURLGetFileSystemRepresentation.argtypes = [
+            ctypes.c_void_p, ctypes.c_bool, ctypes.c_char_p, ctypes.c_long]
+        cf.CFRelease.argtypes = [ctypes.c_void_p]
+        sec.SecTranslocateCreateOriginalPathForURL.restype = ctypes.c_void_p
+        sec.SecTranslocateCreateOriginalPathForURL.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+
+        raw = str(app_path).encode("utf-8")
+        url = cf.CFURLCreateFromFileSystemRepresentation(None, raw, len(raw), True)
+        if not url:
+            return None
+        original = sec.SecTranslocateCreateOriginalPathForURL(url, None)
+        cf.CFRelease(url)
+        if not original:
+            return None
+        buf = ctypes.create_string_buffer(4096)
+        ok = cf.CFURLGetFileSystemRepresentation(original, True, buf, len(buf))
+        cf.CFRelease(original)
+        if not ok:
+            return None
+        path = Path(buf.value.decode("utf-8"))
+        return path if path.suffix == ".app" and not is_translocated(path) else None
+    except Exception:
+        return None
+
+
+def preflight_error() -> Optional[str]:
+    """A reason an update can't possibly be applied, checked before downloading."""
+    if is_frozen() and current_platform() == "Darwin":
+        app_path = _find_app_bundle(Path(sys.executable).resolve())
+        if app_path and is_translocated(app_path) and _untranslocated_path(app_path) is None:
+            return MAC_MOVE_TO_APPLICATIONS
+    return None
+
+
+def update_failed_message(target_tag: str) -> str:
+    if current_platform() == "Darwin":
+        return (f"The update to {target_tag} didn't install. Drag MegaSnake.app into your "
+                "Applications folder, open it from there, then update again.")
+    return (f"The update to {target_tag} didn't install. Download it manually instead "
+            "(details in ~/.megasnake/update.log).")
+
+
+def _update_log_path() -> Path:
+    log_dir = Path.home() / ".megasnake"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / "update.log"
+
+
 def apply_update_and_relaunch(downloaded_path: Path) -> Optional[str]:
     """Replaces the running build with the downloaded one and relaunches it.
 
@@ -228,15 +303,32 @@ del "%~f0"
         app_path = _find_app_bundle(exe_path)
         if app_path is None:
             return "Could not locate the running .app bundle to replace."
+        if is_translocated(app_path):
+            app_path = _untranslocated_path(app_path)
+            if app_path is None:
+                return MAC_MOVE_TO_APPLICATIONS
         extract_dir = Path(tempfile.mkdtemp(prefix="megasnake_update_"))
         script_path = Path(tempfile.gettempdir()) / "megasnake_update.sh"
+        # Only relaunch the new bundle if every step of the swap worked; on any
+        # failure, put the old one back. The new bundle is downloaded by us,
+        # not a browser, so it has no quarantine flag and won't be translocated.
         script_path.write_text(f'''#!/bin/bash
+exec >>"{_update_log_path()}" 2>&1
+echo "=== $(date) updating {app_path}"
 while kill -0 {pid} 2>/dev/null; do sleep 0.3; done
-ditto -x -k "{downloaded_path}" "{extract_dir}"
-rm -rf "{app_path}.bak"
-mv "{app_path}" "{app_path}.bak"
-mv "{extract_dir}/MegaSnake.app" "{app_path}"
+if ditto -x -k "{downloaded_path}" "{extract_dir}" \\
+   && [ -d "{extract_dir}/MegaSnake.app" ] \\
+   && rm -rf "{app_path}.bak" \\
+   && mv "{app_path}" "{app_path}.bak" \\
+   && mv "{extract_dir}/MegaSnake.app" "{app_path}"; then
+  xattr -dr com.apple.quarantine "{app_path}" 2>/dev/null
+  echo "swap ok"
+else
+  echo "swap FAILED"
+  [ -d "{app_path}" ] || mv "{app_path}.bak" "{app_path}"
+fi
 open "{app_path}"
+rm -rf "{extract_dir}"
 rm -f "$0"
 ''', encoding="utf-8")
         script_path.chmod(0o755)
@@ -247,9 +339,14 @@ rm -f "$0"
         exe_path = Path(sys.executable).resolve()
         script_path = Path(tempfile.gettempdir()) / "megasnake_update.sh"
         script_path.write_text(f'''#!/bin/bash
+exec >>"{_update_log_path()}" 2>&1
+echo "=== $(date) updating {exe_path}"
 while kill -0 {pid} 2>/dev/null; do sleep 0.3; done
-cp "{exe_path}" "{exe_path}.bak"
-mv "{downloaded_path}" "{exe_path}"
+if cp "{exe_path}" "{exe_path}.bak" && mv "{downloaded_path}" "{exe_path}"; then
+  echo "swap ok"
+else
+  echo "swap FAILED"
+fi
 chmod +x "{exe_path}"
 "{exe_path}" &
 rm -f "$0"

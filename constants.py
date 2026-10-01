@@ -354,7 +354,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.8.5"
+GAME_VERSION = "1.8.6"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker). Empty
 # until it's deployed, which hides online play behind a friendly message.
@@ -365,6 +365,10 @@ ONLINE_SERVER_URL = ""
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.8.6", [
+        "Fixed an endless update loop on macOS when the app was opened from Downloads",
+        "If an update ever fails to install, the game now says so instead of retrying forever",
+    ]),
     ("1.8.5", [
         "Shop trails are real now: a glowing streak follows your snake all run",
         "(before, they only tinted a faint head glow while you were sped up)",
