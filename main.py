@@ -53,10 +53,36 @@ pygame.display.set_caption("MEGA SNAKE")
 screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
 clock = pygame.time.Clock()
 
-font_big = pygame.font.SysFont("consolas", 40, bold=True)
-font_mid = pygame.font.SysFont("consolas", 24, bold=True)
-font_small = pygame.font.SysFont("consolas", 16)
-font_tiny = pygame.font.SysFont("consolas", 13)
+def _best_monospace_path() -> Optional[str]:
+    """Consolas (the old hardcoded choice) only exists on Windows, so on macOS
+    and Linux it silently fell back to pygame's bundled default font instead
+    of a real monospace face. match_font() actually checks what's installed
+    (unlike SysFont, which never reports a miss), so this tries a priority
+    list of good coding/terminal monospace fonts per OS and picks the first
+    one that's genuinely there; None (pygame's built-in default) is the last
+    resort, not a silent one.
+    """
+    candidates = [
+        "cascadiamono", "cascadiacode", "consolas", "lucidaconsole",  # Windows
+        "menlo", "monaco", "sfmono-regular", "sfmonoregular",  # macOS
+        "jetbrainsmono", "firacode", "hack", "ubuntumono", "robotomono",
+        "dejavusansmono", "notosansmono", "liberationmono",  # Linux
+        "couriernew", "courier",  # universal last resort before the bundled font
+    ]
+    for name in candidates:
+        path = pygame.font.match_font(name)
+        if path:
+            return path
+    return None
+
+
+_FONT_PATH = _best_monospace_path()
+font_big = pygame.font.Font(_FONT_PATH, 40)
+font_big.set_bold(True)
+font_mid = pygame.font.Font(_FONT_PATH, 24)
+font_mid.set_bold(True)
+font_small = pygame.font.Font(_FONT_PATH, 16)
+font_tiny = pygame.font.Font(_FONT_PATH, 13)
 # Consolas has no emoji/CJK/etc. glyphs, so chat uses its own font with far
 # broader Unicode coverage (confirmed on Windows: Latin, accents, many
 # symbols/arrows, and monochrome emoji). It's still a single font, not true
@@ -198,7 +224,10 @@ class Game:
         self.chat_input = ""
         self.chat_log: List[Tuple[str, str]] = []  # [(who, text)], "You" or "Friend"
         self.chat_unread = 0
-        self.chat_last_sent = 0.0
+        # -inf, not 0.0: get_ticks() is process uptime, so a 0.0 baseline would
+        # wrongly rate-limit a message sent within the first CHAT_COOLDOWN
+        # seconds of the game launching.
+        self.chat_last_sent = float("-inf")
         self.map_setup_index = 0
         self.theme = dict(DEFAULT_THEME)
         self.ambient_particles: List[list] = []  # [x, y, vx, vy, life, max_life, radius]

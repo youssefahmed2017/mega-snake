@@ -354,7 +354,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.8.7"
+GAME_VERSION = "1.8.8"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker). Empty
 # until it's deployed, which hides online play behind a friendly message.
@@ -365,6 +365,12 @@ ONLINE_SERVER_URL = ""
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.8.8", [
+        "The game's font now auto-detects the best monospace font installed",
+        "(fixes it silently falling back to a generic font on macOS/Linux,",
+        "since the old hardcoded font was Windows-only)",
+        "Fixed chat's spam cooldown sometimes blocking your very first message",
+    ]),
     ("1.8.7", [
         "Added in-match chat for LAN and Online multiplayer",
         "Open it from the Pause screen with T - the match stays paused while",
