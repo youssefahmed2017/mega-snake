@@ -354,17 +354,20 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.8.14"
+GAME_VERSION = "1.9.0"
 
-# Online multiplayer relay (server/ in this repo, a Cloudflare Worker). Empty
-# until it's deployed, which hides online play behind a friendly message.
-# The MEGASNAKE_SERVER env var overrides it, e.g. ws://127.0.0.1:8787 for a
-# local `wrangler dev`.
-ONLINE_SERVER_URL = ""
+# Online multiplayer relay (server/ in this repo, a Cloudflare Worker),
+# deployed 2026-10-01 to a free *.workers.dev subdomain. The MEGASNAKE_SERVER
+# env var overrides it, e.g. ws://127.0.0.1:8787 for a local `wrangler dev`.
+ONLINE_SERVER_URL = "wss://megasnake-online.megasnake-online.workers.dev"
 
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.9.0", [
+        "Online Multiplayer is live! Host or Join Online Game from Multiplayer",
+        "- no port forwarding, works over the internet, just a 5-letter room code",
+    ]),
     ("1.8.14", [
         "Chat is plain ASCII only for now (emoji/Unicode temporarily dropped)",
         "to rule out font rendering as the cause of chat being broken on Mac",
