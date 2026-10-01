@@ -83,13 +83,38 @@ font_mid = pygame.font.Font(_FONT_PATH, 24)
 font_mid.set_bold(True)
 font_small = pygame.font.Font(_FONT_PATH, 16)
 font_tiny = pygame.font.Font(_FONT_PATH, 13)
-# Consolas has no emoji/CJK/etc. glyphs, so chat uses its own font with far
-# broader Unicode coverage (confirmed on Windows: Latin, accents, many
-# symbols/arrows, and monochrome emoji). It's still a single font, not true
-# per-character fallback, so very rare scripts may still show as boxes.
-font_chat = pygame.font.SysFont(
-    "segoeuiemoji,notocoloremoji,applecoloremoji,notosans,dejavusans,segoeui,arial", 17,
-)
+def _pick_chat_font(size: int) -> pygame.font.Font:
+    """Chat needs far broader Unicode coverage than the UI's plain monospace
+    font (Consolas-style fonts have no emoji/CJK/etc. glyphs). Confirmed on
+    Windows, Segoe UI Emoji covers Latin, accents, many symbols/arrows, AND
+    monochrome emoji in one font. But the equivalent pick on another OS can
+    be an EMOJI-ONLY font with no plain-text glyphs at all - macOS's "Apple
+    Color Emoji" has none. SDL_ttf doesn't error on that, it just silently
+    renders nothing, so this is invisible rather than crashing: the chat
+    panel's border/label still draw (different font), but every message and
+    the typed input are blank - not even the cursor shows. Render a plain
+    ASCII test string and check it actually produced visible glyphs before
+    trusting a candidate; fall back to the UI's own font (no emoji, but
+    never invisible) if nothing does."""
+    candidates = [
+        "segoeuiemoji", "notocoloremoji", "applecoloremoji",
+        "notosans", "dejavusans", "segoeui", "helvetica", "arial",
+    ]
+    test = "Aa1|"
+    for name in candidates:
+        path = pygame.font.match_font(name)
+        if not path:
+            continue
+        try:
+            f = pygame.font.Font(path, size)
+            if f.size(test)[0] >= len(test) * 4:  # a real glyph run, not near-empty
+                return f
+        except pygame.error:
+            continue
+    return pygame.font.Font(_FONT_PATH, size)  # same font every other label uses
+
+
+font_chat = _pick_chat_font(17)
 
 SKIN_NAMES = list(SNAKE_SKINS.keys())
 
