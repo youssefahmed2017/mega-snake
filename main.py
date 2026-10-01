@@ -27,9 +27,10 @@ from constants import (
     SNAKE_SKINS, SKIN_UNLOCK_REQUIREMENT, P2_COLOR, TRAIL_EFFECTS, TRAIL_NAMES,
     FOOD_NORMAL, FOOD_GOLDEN, FOOD_SPEED, FOOD_SHRINK, FOOD_BOMB, FOOD_CURSE, FOOD_COLORS,
     POWERUP_GHOST, POWERUP_MAGNET, POWERUP_SHIELD, POWERUP_SLOWMO, POWERUP_MULT,
-    POWERUP_FREEZE, POWERUP_TELEPORT, POWERUP_COLORS, POWERUP_DURATIONS, CURSE_DURATION,
+    POWERUP_FREEZE, POWERUP_TELEPORT, POWERUP_REVIVE, POWERUP_COLORS, POWERUP_DURATIONS, CURSE_DURATION,
     PORTAL_A, PORTAL_B, MODES, MODE_CONFIG, MODE_DESC, DIFFICULTIES, DIFFICULTY_SPEED_MULT,
     GAME_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
+    LAN_RULESETS, LAN_RULESET_NAMES, LAN_MAPS, LAN_MAP_NAMES,
 )
 from snake import PlayerSnake
 from enemy import EnemySnake
@@ -65,6 +66,7 @@ STATE_CHANGELOG = "changelog"
 STATE_SHOP = "shop"
 STATE_ENTER_INITIALS = "enter_initials"
 STATE_LAN_MENU = "lan_menu"
+STATE_LAN_SETUP = "lan_setup"
 STATE_LAN_HOST_WAIT = "lan_host_wait"
 STATE_LAN_JOIN_IP = "lan_join_ip"
 STATE_LAN_CONNECTING = "lan_connecting"
@@ -80,6 +82,7 @@ PAUSE_ITEMS = ["Resume", "Restart", "Settings", "Main Menu"]
 LAN_HOST_PAUSE_ITEMS = ["Resume", "Settings", "End Session"]
 SETTINGS_ITEMS = ["Volume", "Difficulty", "Screen Shake", "Mute", "Color Blind Mode", "Back"]
 LAN_MENU_ITEMS = ["Host Game", "Join Game", "Back"]
+LAN_SETUP_ITEMS = ["Ruleset", "Map", "Start Hosting"]
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
@@ -141,6 +144,12 @@ class Game:
         self.lan_client: Optional[network.Client] = None
         self.lan_link: Optional[network.LineSocket] = None
         self.lan_menu_index = 0
+        self.lan_setup_index = 0
+        self.lan_ruleset_idx = LAN_RULESET_NAMES.index("Walls")
+        self.lan_map_idx = 0
+        self.lan_ruleset_name = LAN_RULESET_NAMES[self.lan_ruleset_idx]
+        self.lan_map_name = LAN_MAP_NAMES[self.lan_map_idx]
+        self.lan_cfg_override: Optional[dict] = None
         self.lan_ip_input = ""
         self.lan_error_msg = ""
         self.local_ip: Optional[str] = None
@@ -153,7 +162,12 @@ class Game:
         return MODES[self.mode_idx]
 
     def mode_cfg(self) -> dict:
-        return MODE_CONFIG[self.mode_name()]
+        base = MODE_CONFIG[self.mode_name()]
+        if self.lan_cfg_override:
+            merged = dict(base)
+            merged.update(self.lan_cfg_override)
+            return merged
+        return base
 
     def _center(self, cell: Tuple[int, int]) -> Tuple[float, float]:
         return cell[0] + 0.5, cell[1] + 0.5
@@ -241,11 +255,13 @@ class Game:
         self.lan_host = None
         self.lan_client = None
         self.lan_role = None
+        self.lan_cfg_override = None
 
     def _build_snapshot(self, game_over: bool = False) -> dict:
         return {
             "type": "state",
             "mode": self.mode_name(),
+            "ruleset": self.lan_ruleset_name,
             "skin_p1": SKIN_NAMES[self.skin_idx],
             "p1_body": [list(c) for c in self.player.body],
             "p1_dir": list(self.player.direction),
@@ -294,6 +310,9 @@ class Game:
             self.mode_idx = MODES.index(snap["mode"])
         if snap.get("skin_p1") in SKIN_NAMES:
             self.skin_idx = SKIN_NAMES.index(snap["skin_p1"])
+        if snap.get("ruleset") in LAN_RULESETS:
+            self.lan_ruleset_name = snap["ruleset"]
+            self.lan_cfg_override = dict(LAN_RULESETS[self.lan_ruleset_name])
 
         if snap.get("game_over"):
             self.game_over_reason = snap.get("game_over_reason") or "Game over."
@@ -315,7 +334,8 @@ class Game:
             self.lan_role = "host"
             self.mode_idx = MODES.index("Coop")
             self.reset_run()
-            link.send({"type": "welcome", "mode": self.mode_name(), "skin": SKIN_NAMES[self.skin_idx]})
+            link.send({"type": "welcome", "mode": self.mode_name(), "skin": SKIN_NAMES[self.skin_idx],
+                       "ruleset": self.lan_ruleset_name})
             self.state = STATE_PLAYING
 
     def _lan_connecting_poll(self) -> None:
@@ -402,6 +422,12 @@ class Game:
             self.rivals.append(EnemySnake(rx, ry))
 
         self.obstacles: set = set()
+        if self.lan_cfg_override:
+            heads = [(cx, cy)] + ([(cx - 6, cy)] if cfg["coop"] else [])
+            self.obstacles |= {
+                cell for cell in LAN_MAPS.get(self.lan_map_name, set())
+                if all(abs(cell[0] - hx) + abs(cell[1] - hy) >= 4 for hx, hy in heads)
+            }
         self.foods: List[Food] = []
         self.powerups: List[PowerUp] = []
         self.active_powerups: Dict[str, float] = {}
@@ -582,6 +608,11 @@ class Game:
         if new_p:
             self.powerups.append(new_p)
 
+        if cfg["coop"] and self.player2 is not None and self.player_alive != self.player2_alive:
+            if not any(p.kind == POWERUP_REVIVE for p in self.powerups) and random.random() < 0.015:
+                rx, ry = random_free_cell(self.occupied_cells())
+                self.powerups.append(PowerUp(rx, ry, POWERUP_REVIVE))
+
         if not self.portal_pair:
             pair = maybe_spawn_portal_pair(self.occupied_cells())
             if pair:
@@ -677,10 +708,51 @@ class Game:
                 nearest = min(self.foods, key=lambda f: abs(f.x - self.player.head[0]) + abs(f.y - self.player.head[1]))
                 self._consume_food(nearest, self.player, auto=True)
             return
+        if kind == POWERUP_REVIVE:
+            self._revive_teammate()
+            return
 
         self.active_powerups[kind] = POWERUP_DURATIONS[kind]
         self.sounds.play(self.sounds.freeze if kind == POWERUP_FREEZE else self.sounds.powerup)
         self.particles.burst(px, py, self.powerup_color(kind), count=18)
+
+    def _revive_teammate(self) -> None:
+        if self.player2 is None or self.player_alive == self.player2_alive:
+            return  # nothing to revive, or both already down/up
+        dead_tag = "p1" if not self.player_alive else "p2"
+        reviver = self.player2 if dead_tag == "p1" else self.player
+        dead_snake = self.player if dead_tag == "p1" else self.player2
+
+        occ = self.occupied_cells()
+        rx, ry = reviver.head
+        spot = None
+        for ddx, ddy in [(2, 0), (-2, 0), (0, 2), (0, -2), (3, 0), (-3, 0), (0, 3), (0, -3)]:
+            cand = (rx + ddx, ry + ddy)
+            if 0 <= cand[0] < GRID_W and 0 <= cand[1] < GRID_H and cand not in occ:
+                spot = cand
+                break
+        if spot is None:
+            spot = random_free_cell(occ)
+
+        dead_snake.body = deque([spot, (spot[0] - 1, spot[1]), (spot[0] - 2, spot[1])])
+        dead_snake.prev_body = list(dead_snake.body)
+        dead_snake.direction = (1, 0)
+        dead_snake.pending_direction = (1, 0)
+
+        if dead_tag == "p1":
+            self.player_alive = True
+        else:
+            self.player2_alive = True
+
+        # A brief shared Ghost window so the revived teammate (and their
+        # rescuer) can't be insta-killed by whatever was nearby.
+        self.active_powerups[POWERUP_GHOST] = max(self.active_powerups.get(POWERUP_GHOST, 0.0), 2.5)
+
+        px, py = grid_to_px(*self._center(spot))
+        self.particles.burst(px, py, self.powerup_color(POWERUP_REVIVE), count=26, speed=220)
+        self.shake(0.25, 5)
+        self.sounds.play(self.sounds.unlock)
+        self._announce("REVIVED!", self.powerup_color(POWERUP_REVIVE), life=1.5)
 
     def _blocking_set(self, exclude_tag: str) -> set:
         s = set(self.obstacles)
@@ -1207,7 +1279,7 @@ class Game:
         y += 30
         mode_line = f"Mode: {self.mode_name()}  [{self.difficulty}]"
         if self.lan_role:
-            mode_line = f"LAN {'Host' if self.lan_role == 'host' else 'Client'}: {self.mode_name()}"
+            mode_line = f"LAN {'Host' if self.lan_role == 'host' else 'Client'}: {self.lan_ruleset_name}"
         screen.blit(font_small.render(mode_line, True, TEXT_DIM), (x, y))
         y += 24
 
@@ -1626,12 +1698,69 @@ class Game:
         share_r = font_small.render("Share this with the other player on your network.", True, TEXT_DIM)
         screen.blit(share_r, (SCREEN_W // 2 - share_r.get_width() // 2, 210))
 
+        setup_r = font_small.render(f"Ruleset: {self.lan_ruleset_name}   Map: {self.lan_map_name}", True, TEXT)
+        screen.blit(setup_r, (SCREEN_W // 2 - setup_r.get_width() // 2, 240))
+
         dots = "." * (1 + int(pygame.time.get_ticks() / 400) % 3)
         waiting_r = font_mid.render(f"Waiting for player to join{dots}", True, TEXT)
-        screen.blit(waiting_r, (SCREEN_W // 2 - waiting_r.get_width() // 2, 280))
+        screen.blit(waiting_r, (SCREEN_W // 2 - waiting_r.get_width() // 2, 290))
 
         foot = font_small.render("Esc: cancel", True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 40))
+
+    def draw_lan_setup(self) -> None:
+        screen.fill(BG)
+        t = font_big.render("MATCH SETUP", True, ACCENT)
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 60))
+
+        # Live selection, not the "committed" self.lan_ruleset_name/lan_map_name
+        # (those only update when Start Hosting is actually pressed) - this
+        # screen must reflect whatever's currently highlighted as you browse.
+        live_ruleset = LAN_RULESET_NAMES[self.lan_ruleset_idx]
+        live_map = LAN_MAP_NAMES[self.lan_map_idx]
+
+        values = [
+            f"< {live_ruleset} >",
+            f"< {live_map} >",
+            "",
+        ]
+        y = 150
+        for i, label in enumerate(LAN_SETUP_ITEMS):
+            selected = i == self.lan_setup_index
+            color = ACCENT if selected else TEXT
+            prefix = "> " if selected else "  "
+            line = f"{prefix}{label}"
+            if values[i]:
+                line += "  " + values[i]
+            text = font_mid.render(line, True, color)
+            screen.blit(text, (SCREEN_W // 2 - 160, y))
+            y += 44
+
+        desc = LAN_RULESETS[live_ruleset]["desc"]
+        desc_r = font_small.render(desc, True, TEXT_DIM)
+        screen.blit(desc_r, (SCREEN_W // 2 - desc_r.get_width() // 2, y + 10))
+
+        obstacle_count = len(LAN_MAPS[live_map])
+        map_r = font_small.render(
+            f"{obstacle_count} obstacle{'s' if obstacle_count != 1 else ''} on this map" if obstacle_count else "No obstacles on this map",
+            True, TEXT_DIM,
+        )
+        screen.blit(map_r, (SCREEN_W // 2 - map_r.get_width() // 2, y + 34))
+
+        # Tiny obstacle-layout preview
+        preview_w, preview_h = 220, 150
+        px0 = SCREEN_W // 2 - preview_w // 2
+        py0 = y + 66
+        pygame.draw.rect(screen, (24, 26, 36), (px0, py0, preview_w, preview_h), border_radius=6)
+        pygame.draw.rect(screen, (48, 52, 66), (px0, py0, preview_w, preview_h), width=1, border_radius=6)
+        sx, sy = preview_w / GRID_W, preview_h / GRID_H
+        for (ox, oy) in LAN_MAPS[live_map]:
+            pygame.draw.rect(screen, (90, 94, 110), (px0 + ox * sx, py0 + oy * sy, max(2, sx), max(2, sy)))
+        for hx in (GRID_W // 2, GRID_W // 2 - 6):
+            pygame.draw.circle(screen, GREEN, (int(px0 + hx * sx), int(py0 + GRID_H // 2 * sy)), 3)
+
+        foot = font_tiny.render("Up/Down select   Left/Right change   Enter confirm   Esc back", True, TEXT_DIM)
+        screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 20))
 
     def draw_lan_join_ip(self) -> None:
         screen.fill(BG)
@@ -1863,6 +1992,7 @@ class Game:
             (POWERUP_MULT, "2x: double score (10s)"),
             (POWERUP_FREEZE, "Freeze: rival snakes stop (6s)"),
             (POWERUP_TELEPORT, "Teleport: instantly eat the nearest food"),
+            (POWERUP_REVIVE, "Revive: brings your Coop/LAN teammate back (only spawns when they're down)"),
         ]
         for kind, desc in powerups:
             rect = pygame.Rect(right_x + 1, y + 1, 14, 14)
@@ -1976,17 +2106,47 @@ class Game:
             self.sounds.play(self.sounds.menu_select)
             choice = LAN_MENU_ITEMS[self.lan_menu_index]
             if choice == "Host Game":
-                try:
-                    self.lan_host = network.Host()
-                    self.state = STATE_LAN_HOST_WAIT
-                except OSError as e:
-                    self.lan_error_msg = f"Could not start hosting: {e}"
-                    self.state = STATE_LAN_ERROR
+                self.lan_setup_index = 0
+                self.state = STATE_LAN_SETUP
             elif choice == "Join Game":
                 self.lan_ip_input = ""
                 self.state = STATE_LAN_JOIN_IP
             elif choice == "Back":
                 self.state = STATE_MENU
+
+    def handle_lan_setup_key(self, key) -> None:
+        n = len(LAN_SETUP_ITEMS)
+        if key in (pygame.K_UP, pygame.K_w):
+            self.lan_setup_index = (self.lan_setup_index - 1) % n
+            self.sounds.play(self.sounds.menu_move)
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            self.lan_setup_index = (self.lan_setup_index + 1) % n
+            self.sounds.play(self.sounds.menu_move)
+        elif key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d):
+            direction = -1 if key in (pygame.K_LEFT, pygame.K_a) else 1
+            choice = LAN_SETUP_ITEMS[self.lan_setup_index]
+            if choice == "Ruleset":
+                self.lan_ruleset_idx = (self.lan_ruleset_idx + direction) % len(LAN_RULESET_NAMES)
+                self.sounds.play(self.sounds.menu_move)
+            elif choice == "Map":
+                self.lan_map_idx = (self.lan_map_idx + direction) % len(LAN_MAP_NAMES)
+                self.sounds.play(self.sounds.menu_move)
+        elif key == pygame.K_RETURN:
+            choice = LAN_SETUP_ITEMS[self.lan_setup_index]
+            if choice == "Start Hosting":
+                self.sounds.play(self.sounds.menu_select)
+                self.lan_ruleset_name = LAN_RULESET_NAMES[self.lan_ruleset_idx]
+                self.lan_map_name = LAN_MAP_NAMES[self.lan_map_idx]
+                self.lan_cfg_override = dict(LAN_RULESETS[self.lan_ruleset_name])
+                try:
+                    self.lan_host = network.Host()
+                    self.state = STATE_LAN_HOST_WAIT
+                except OSError as e:
+                    self.lan_cfg_override = None
+                    self.lan_error_msg = f"Could not start hosting: {e}"
+                    self.state = STATE_LAN_ERROR
+        elif key == pygame.K_ESCAPE:
+            self.state = STATE_LAN_MENU
 
     def handle_lan_join_ip_key(self, key) -> None:
         if key == pygame.K_RETURN:
@@ -2241,11 +2401,14 @@ class Game:
                 self.state = STATE_MENU
         elif self.state == STATE_LAN_MENU:
             self.handle_lan_menu_key(key)
+        elif self.state == STATE_LAN_SETUP:
+            self.handle_lan_setup_key(key)
         elif self.state == STATE_LAN_HOST_WAIT:
             if key == pygame.K_ESCAPE:
                 if self.lan_host:
                     self.lan_host.close()
                 self.lan_host = None
+                self.lan_cfg_override = None
                 self.state = STATE_LAN_MENU
         elif self.state == STATE_LAN_JOIN_IP:
             self.handle_lan_join_ip_key(key)
@@ -2317,6 +2480,8 @@ class Game:
                 self.draw_enter_initials()
             elif self.state == STATE_LAN_MENU:
                 self.draw_lan_menu()
+            elif self.state == STATE_LAN_SETUP:
+                self.draw_lan_setup()
             elif self.state == STATE_LAN_HOST_WAIT:
                 self.draw_lan_host_wait()
             elif self.state == STATE_LAN_JOIN_IP:

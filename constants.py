@@ -74,6 +74,7 @@ POWERUP_SLOWMO = "slowmo"
 POWERUP_MULT = "mult2x"
 POWERUP_FREEZE = "freeze"
 POWERUP_TELEPORT = "teleport"
+POWERUP_REVIVE = "revive"  # coop/LAN only - spawns only while a teammate is down
 
 POWERUP_COLORS = {
     POWERUP_GHOST: (200, 220, 255),
@@ -83,6 +84,7 @@ POWERUP_COLORS = {
     POWERUP_MULT: GOLD,
     POWERUP_FREEZE: (140, 220, 255),
     POWERUP_TELEPORT: (255, 255, 255),
+    POWERUP_REVIVE: (255, 80, 130),
 }
 
 # Okabe-Ito palette: distinguishable under the common forms of color-vision
@@ -104,6 +106,7 @@ COLORBLIND_POWERUP_COLORS = {
     POWERUP_MULT: (240, 228, 66),
     POWERUP_FREEZE: (86, 180, 233),
     POWERUP_TELEPORT: (230, 159, 0),
+    POWERUP_REVIVE: (213, 94, 0),
 }
 
 # Durations in seconds. Instant-effect power-ups (teleport) aren't in here.
@@ -145,6 +148,72 @@ MODE_DESC = {
     "Daily": "Same seeded layout for everyone, today only.",
 }
 
+# LAN match setup: the host picks a ruleset (wrap/obstacle behavior) and a map
+# (a fixed obstacle layout, independent of the ruleset's own procedural growth)
+# before opening the socket. Both apply on top of the shared Coop rules (2
+# snakes, shared score) - they don't change who can join or how.
+LAN_RULESETS = {
+    "Classic": {"wrap": True, "obstacles": False, "desc": "Wrap around edges."},
+    "Walls": {"wrap": False, "obstacles": False, "desc": "Edges kill you."},
+    "Maze": {"wrap": False, "obstacles": True, "desc": "Obstacles grow over time."},
+}
+LAN_RULESET_NAMES = list(LAN_RULESETS.keys())
+
+
+def _ring(margin: int) -> set:
+    pts = set()
+    for x in range(margin, GRID_W - margin):
+        pts.add((x, margin))
+        pts.add((x, GRID_H - 1 - margin))
+    for y in range(margin, GRID_H - margin):
+        pts.add((margin, y))
+        pts.add((GRID_W - 1 - margin, y))
+    return pts
+
+
+def _arena_map() -> set:
+    ring = _ring(3)
+    cx, cy = GRID_W // 2, GRID_H // 2
+    gaps = set()
+    for d in (-1, 0, 1):
+        gaps.add((cx + d, 3))
+        gaps.add((cx + d, GRID_H - 1 - 3))
+        gaps.add((3, cy + d))
+        gaps.add((GRID_W - 1 - 3, cy + d))
+    return ring - gaps
+
+
+def _cross_map() -> set:
+    pts = set()
+    cx, cy = GRID_W // 2, GRID_H // 2
+    for x in range(6, GRID_W - 6):
+        if abs(x - cx) > 3:
+            pts.add((x, cy - 6))
+            pts.add((x, cy + 6))
+    for y in range(4, GRID_H - 4):
+        if abs(y - cy) > 3:
+            pts.add((cx - 10, y))
+            pts.add((cx + 10, y))
+    return pts
+
+
+def _pillars_map() -> set:
+    pts = set()
+    for x in (6, 16, 26):
+        for y in (4, 11, 18):
+            if (x, y) != (16, 11):
+                pts.add((x, y))
+    return pts
+
+
+LAN_MAPS = {
+    "Open": set(),
+    "Pillars": _pillars_map(),
+    "Cross": _cross_map(),
+    "Arena": _arena_map(),
+}
+LAN_MAP_NAMES = list(LAN_MAPS.keys())
+
 DIFFICULTIES = ["Easy", "Normal", "Hard"]
 DIFFICULTY_SPEED_MULT = {"Easy": 0.85, "Normal": 1.0, "Hard": 1.25}
 
@@ -162,11 +231,16 @@ TRAIL_NAMES = list(TRAIL_EFFECTS.keys())
 
 SAVE_DIR_NAME = ".megasnake"
 
-GAME_VERSION = "1.4.0"
+GAME_VERSION = "1.5.0"
 
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.5.0", [
+        "LAN hosts now pick a ruleset (Classic/Walls/Maze) and a map before starting",
+        "4 maps: Open, Pillars, Cross, Arena",
+        "Revive power-up: spawns in Coop/LAN when your teammate is down, brings them back",
+    ]),
     ("1.4.0", [
         "Ghost replay: race a translucent replay of your best run in each mode",
         "Daily quests: 3 new objectives every day with coin rewards",
