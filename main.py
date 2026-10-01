@@ -28,7 +28,8 @@ import colorsys
 from constants import (
     CELL_SIZE, GRID_W, GRID_H, SIDEBAR_W, SCREEN_W, SCREEN_H, FPS, BASE_MOVE_INTERVAL,
     BG, GRID_LINE, SIDEBAR_BG, TEXT, TEXT_DIM, ACCENT, DANGER, GOLD, GREEN, PURPLE,
-    SNAKE_SKINS, SKIN_UNLOCK_REQUIREMENT, P2_COLOR, TRAIL_EFFECTS, TRAIL_NAMES,
+    SNAKE_SKINS, SKIN_UNLOCK_REQUIREMENT, P2_COLOR, PLAYER_COLORS, PLAYER_LABELS, MAX_PLAYERS,
+    TRAIL_EFFECTS, TRAIL_NAMES,
     FOOD_NORMAL, FOOD_GOLDEN, FOOD_SPEED, FOOD_SHRINK, FOOD_BOMB, FOOD_CURSE, FOOD_COLORS,
     POWERUP_GHOST, POWERUP_MAGNET, POWERUP_SHIELD, POWERUP_SLOWMO, POWERUP_MULT,
     POWERUP_FREEZE, POWERUP_TELEPORT, POWERUP_REVIVE, POWERUP_COLORS, POWERUP_DURATIONS, CURSE_DURATION,
@@ -95,6 +96,9 @@ font_chat = pygame.font.Font(_FONT_PATH, 17)
 
 SKIN_NAMES = list(SNAKE_SKINS.keys())
 
+PTAGS = ["p1", "p2", "p3", "p4"]  # self.players index <-> network/UI tag
+SLOT_LABEL = {"host": "P1", "p2": "P2", "p3": "P3", "p4": "P4"}  # network slot <-> chat/roster label
+
 STATE_MENU = "menu"
 STATE_PLAYING = "playing"
 STATE_PAUSED = "paused"
@@ -142,6 +146,10 @@ CHAT_COOLDOWN = 0.35
 # once something finally touches the dead socket. A small periodic heartbeat
 # keeps real traffic flowing so that never has the chance to happen.
 LAN_HEARTBEAT_SECONDS = 4.0
+
+# Full game state is replaceable, so cap uploads instead of sending on every
+# render frame or every simulation tick. Inputs and control messages stay immediate.
+NETWORK_SNAPSHOT_INTERVAL = 0.1
 
 # How long each side waits for the other to confirm its version before just
 # proceeding anyway (see _lan_host_poll / _lan_connecting_poll). Failing open
@@ -247,6 +255,9 @@ class Game:
         self.lan_online = False
         self.online_code_input = ""
         self.snapshot_accum = 0.0
+        self.snapshot_seq = 0
+        self.last_snapshot_seq = -1
+        self.snapshot_age = NETWORK_SNAPSHOT_INTERVAL
 
         self.chat_active = False
         self.chat_input = ""
@@ -269,6 +280,14 @@ class Game:
         self.lan_pending_link: Optional[network.LineSocket] = None
         self.lan_handshake_deadline = 0.0
         self.lan_connect_label = ""
+        # Host-side lobby bookkeeping: slot -> deadline for its version check
+        # (LAN only), and which slots were in the match when it started (to
+        # notice one vanishing later without an explicit "they left" message
+        # - see _lan_sync_roster).
+        self.lan_unverified: Dict[str, float] = {}
+        self.lan_known_slots: set = set()
+        self.lan_toast = ""
+        self.lan_toast_until = 0.0
         self.map_setup_index = 0
         self.theme = dict(DEFAULT_THEME)
         self.ambient_particles: List[list] = []  # [x, y, vx, vy, life, max_life, radius]
@@ -485,6 +504,9 @@ class Game:
         self.lan_pending_link = None
         self.lan_role = None
         self.lan_cfg_override = None
+        self.lan_unverified = {}
+        self.lan_known_slots = set()
+        self.lan_toast = ""
         if self.chat_active:
             pygame.key.stop_text_input()
         self.chat_active = False
@@ -505,23 +527,29 @@ class Game:
         if link.reconnecting:
             return "Connection lost - reconnecting..."
         if not link.peer_present:
-            who = "your friend" if self.lan_role == "host" else "the host"
+            if self.lan_role == "host":
+                down = [SLOT_LABEL[s] for s, up in link.roster.items() if not up]
+                who = "/".join(down) if down else "your friend"
+            else:
+                who = "the host"
             return f"Waiting for {who} to reconnect..."
         return None
 
     def _build_snapshot(self, game_over: bool = False) -> dict:
+        self.snapshot_seq += 1
         return {
             "type": "state",
+            "seq": self.snapshot_seq,
             "mode": self.mode_name(),
             "ruleset": self.lan_ruleset_name,
             "map": self.map_name,
             "skin_p1": SKIN_NAMES[self.skin_idx],
-            "p1_body": [list(c) for c in self.player.body],
-            "p1_dir": list(self.player.direction),
-            "p1_alive": self.player_alive,
-            "p2_body": [list(c) for c in self.player2.body] if self.player2 else [],
-            "p2_dir": list(self.player2.direction) if self.player2 else [1, 0],
-            "p2_alive": self.player2_alive,
+            "match_size": self.match_size,
+            "players": [
+                {"body": [list(c) for c in p.body], "dir": list(p.direction), "alive": self.players_alive[i]}
+                if p is not None else None
+                for i, p in enumerate(self.players)
+            ],
             "foods": [{"x": f.x, "y": f.y, "kind": f.kind} for f in self.foods],
             "powerups": [{"x": p.x, "y": p.y, "kind": p.kind} for p in self.powerups],
             "obstacles": [list(o) for o in self.obstacles],
@@ -536,17 +564,26 @@ class Game:
         }
 
     def apply_snapshot(self, snap: dict) -> None:
-        self.player.body = deque(tuple(c) for c in snap["p1_body"])
-        self.player.prev_body = list(self.player.body)
-        self.player.direction = tuple(snap["p1_dir"])
-        self.player_alive = snap["p1_alive"]
-
-        if self.player2 is None:
-            self.player2 = PlayerSnake(0, 0)
-        self.player2.body = deque(tuple(c) for c in snap["p2_body"]) if snap["p2_body"] else deque([(0, 0)])
-        self.player2.prev_body = list(self.player2.body)
-        self.player2.direction = tuple(snap["p2_dir"])
-        self.player2_alive = snap["p2_alive"]
+        seq = snap.get("seq")
+        if isinstance(seq, int) and not isinstance(seq, bool):
+            if seq <= self.last_snapshot_seq:
+                return
+            self.last_snapshot_seq = seq
+        self.snapshot_age = 0.0
+        self.match_size = snap.get("match_size", 2)
+        for i, pdata in enumerate(snap.get("players", [])):
+            if pdata is None:
+                self.players[i] = None
+                self.players_alive[i] = False
+                continue
+            snake = self.players[i]
+            previous_body = list(snake.body) if snake is not None else []
+            if snake is None:
+                snake = self.players[i] = PlayerSnake(0, 0)
+            snake.body = deque(tuple(c) for c in pdata["body"]) if pdata["body"] else deque([(0, 0)])
+            snake.prev_body = previous_body or list(snake.body)
+            snake.direction = tuple(pdata["dir"])
+            self.players_alive[i] = pdata["alive"]
 
         self.foods = [Food(f["x"], f["y"], f["kind"]) for f in snap["foods"]]
         self.powerups = [PowerUp(p["x"], p["y"], p["kind"]) for p in snap["powerups"]]
@@ -574,7 +611,7 @@ class Game:
             self.game_over_reason = snap.get("game_over_reason") or "Game over."
             self.final_stats = {
                 "score": self.score, "food_eaten": 0, "golden_eaten": 0,
-                "length": len(self.player.body) + len(self.player2.body), "time_alive": 0,
+                "length": sum(len(p.body) for p in self.players if p is not None), "time_alive": 0,
             }
             self.score_breakdown = {"normal": 0, "golden": 0, "mult_bonus": 0, "penalty": 0}
             self.run_coins_earned = 0
@@ -648,18 +685,41 @@ class Game:
         text = _clean_chat_text(str(msg.get("text", "")))[:CHAT_MAX_LEN]
         if not text:
             return
-        self._append_chat("Friend", text)
+        who = SLOT_LABEL.get(msg.get("from"), "Friend")
+        self._append_chat(who, text)
         self.sounds.play(self.sounds.chat)
 
-    def _lan_begin_session(self, role: str) -> None:
-        self.lan_link = self.lan_pending_link
-        self.lan_pending_link = None
+    def _lan_begin_session(self, role: str, match_size: int = 2) -> None:
         self.lan_role = role
+        self.snapshot_accum = 0.0
+        self.snapshot_seq = 0
+        self.last_snapshot_seq = -1
+        self.snapshot_age = NETWORK_SNAPSHOT_INTERVAL
+        if role == "host":
+            self.lan_link = self.lan_host.link if self.lan_online else self.lan_host
+        # else: the guest's self.lan_link was already set in _lan_connecting_poll
+        self.lan_known_slots = set(self.lan_link.roster.keys()) if role == "host" else set()
         self.mode_idx = MODES.index("Coop")
-        self.reset_run()
+        self.reset_run(match_size=match_size)
         self.state = STATE_PLAYING
 
+    def _lan_channel(self):
+        """The one object main.py polls/sends through, regardless of role or
+        transport: for Online it's always the single OnlineLink (host or
+        guest); for LAN it's the Host itself while hosting (it already
+        merges every guest), or the lone GuestLink while joining."""
+        if self.lan_role == "host":
+            return self.lan_host.link if self.lan_online else self.lan_host
+        return self.lan_link
+
     def _lan_host_poll(self) -> None:
+        """Runs for the whole lobby: host just started hosting and is
+        waiting for 1-3 guests to join, showing a live roster, until they
+        press Enter to start (see handle_lan_host_wait_key). A guest's
+        version is checked here (LAN only - Online's relay already gated it
+        before the connection even completed) by watching for each new
+        slot's first message; a mismatch gets that one slot disconnected
+        without affecting anyone else already waiting."""
         if not self.lan_host:
             return
         failure = self.lan_host.failure()
@@ -668,113 +728,87 @@ class Game:
             self._lan_teardown()
             self.state = STATE_LAN_ERROR
             return
+        self.lan_role = "host"
+        channel = self.lan_host.link if self.lan_online else self.lan_host
+        if self.lan_online and not channel.connected and channel.done:
+            self.lan_error_msg = channel.error or "Could not create a room."
+            self._lan_teardown()
+            self.state = STATE_LAN_ERROR
+            return
 
-        if self.lan_pending_link is None:
-            link = self.lan_host.poll_new_connection()
-            if not link:
-                return
-            self.lan_pending_link = link
-            self.lan_handshake_deadline = pygame.time.get_ticks() / 1000.0 + LAN_HANDSHAKE_TIMEOUT
+        now = pygame.time.get_ticks() / 1000.0
+        for slot in list(channel.roster.keys()):
+            if slot != "host" and slot not in self.lan_unverified:
+                self.lan_unverified[slot] = now + LAN_HANDSHAKE_TIMEOUT
+        for slot in list(self.lan_unverified.keys()):
+            if slot not in channel.roster:
+                del self.lan_unverified[slot]  # left before we even checked them
 
-        link = self.lan_pending_link
-        for msg in link.poll():
-            if msg.get("type") == "hello":
+        for msg in channel.poll():
+            sender = msg.get("from")
+            if self.lan_online:
+                continue  # no in-band version check needed; the relay already gated it
+            if msg.get("type") == "hello" and sender in self.lan_unverified:
                 their_version = str(msg.get("version") or "")
                 if their_version and their_version != GAME_VERSION:
-                    link.send({"type": "welcome_reject", "host_version": GAME_VERSION})
-                    link.close()
-                    self.lan_pending_link = None
-                    self.lan_error_msg = (
-                        f"A player on v{their_version} tried to join - they need v{GAME_VERSION} too. "
-                        "Make sure you're both on the latest version."
+                    self.lan_host.close_slot(sender)
+                    self.lan_toast = (
+                        f"A player on v{their_version} tried to join (need v{GAME_VERSION}) - disconnected."
                     )
-                    self.state = STATE_LAN_ERROR
-                    return
-                link.send({"type": "welcome", "version": GAME_VERSION, "mode": self.mode_name(),
-                           "skin": SKIN_NAMES[self.skin_idx], "ruleset": self.lan_ruleset_name})
-                self._lan_begin_session("host")
-                return
-        if not link.connected:
-            # They vanished mid-handshake. network.Host only ever accepts one
-            # connection for its whole lifetime, so there's no "keep waiting
-            # for someone else" to fall back to here - end this hosting
-            # attempt cleanly instead of silently re-polling a dead link.
-            self.lan_error_msg = "Player disconnected before the connection finished."
-            self._lan_teardown()
-            self.state = STATE_LAN_ERROR
-            return
-        if pygame.time.get_ticks() / 1000.0 >= self.lan_handshake_deadline:
-            # No "hello" in time - most likely a pre-handshake build that will
-            # never send one. Can't version-check it, so just let it through.
-            link.send({"type": "welcome", "version": GAME_VERSION, "mode": self.mode_name(),
-                       "skin": SKIN_NAMES[self.skin_idx], "ruleset": self.lan_ruleset_name})
-            self._lan_begin_session("host")
+                    self.lan_toast_until = now + 4.0
+                del self.lan_unverified[sender]
+
+        for slot, deadline in list(self.lan_unverified.items()):
+            if now >= deadline:
+                del self.lan_unverified[slot]  # no "hello" in time; let an old build through
 
     def _lan_connecting_poll(self) -> None:
-        if not self.lan_client and not self.lan_pending_link:
+        """Online: OnlineClient already fully resolves connect-or-reject
+        (including a version mismatch, rejected server-side by the relay
+        before the connection even completes) via poll_connect_result().
+        LAN: TCP has no such gate, so the guest sends its version as its
+        first message for the host to check (see _lan_host_poll); if
+        mismatched the host just closes this connection, which shows up
+        here as a plain disconnect."""
+        if not self.lan_client:
             return
-        if self.lan_pending_link is None:
-            result = self.lan_client.poll_connect_result()
-            if result is None:
-                return
-            if result is False:
-                self.lan_error_msg = self.lan_client.error or "Could not connect."
-                self.lan_client = None
-                self.state = STATE_LAN_ERROR
-                return
-            self.lan_connect_label = self.lan_client.label
-            self.lan_pending_link = self.lan_client.link
+        result = self.lan_client.poll_connect_result()
+        if result is None:
+            return
+        if result is False:
+            self.lan_error_msg = self.lan_client.error or "Could not connect."
             self.lan_client = None
-            self.lan_pending_link.send({"type": "hello", "version": GAME_VERSION})
-            self.lan_handshake_deadline = pygame.time.get_ticks() / 1000.0 + LAN_HANDSHAKE_TIMEOUT
-
-        link = self.lan_pending_link
-        for msg in link.poll():
-            mtype = msg.get("type")
-            if mtype == "welcome_reject":
-                host_version = str(msg.get("host_version") or "?")
-                self.lan_error_msg = (
-                    f"Version mismatch: the host is on v{host_version}, you're on v{GAME_VERSION}. "
-                    "Update to the same version."
-                )
-                self._lan_teardown()
-                self.state = STATE_LAN_ERROR
-                return
-            if mtype == "welcome":
-                host_version = str(msg.get("version") or "")
-                if host_version and host_version != GAME_VERSION:
-                    self.lan_error_msg = (
-                        f"Version mismatch: the host is on v{host_version}, you're on v{GAME_VERSION}. "
-                        "Update to the same version."
-                    )
-                    self._lan_teardown()
-                    self.state = STATE_LAN_ERROR
-                    return
-                self._lan_begin_session("client")
-                return
-        if not link.connected:
-            self.lan_error_msg = "Host disconnected."
-            self._lan_teardown()
             self.state = STATE_LAN_ERROR
             return
-        if pygame.time.get_ticks() / 1000.0 >= self.lan_handshake_deadline:
-            # No "welcome" in time - a pre-handshake host will never send one
-            # with a version field we can check, so just proceed without it.
-            self._lan_begin_session("client")
+        self.lan_connect_label = self.lan_client.label
+        self.lan_link = self.lan_client.link
+        self.lan_client = None
+        self.lan_role = "client"
+        if not self.lan_online:
+            self.lan_link.send({"type": "hello", "version": GAME_VERSION})
+        self.state = STATE_LAN_HOST_WAIT  # the lobby screen, shared with the host (see draw_lan_host_wait)
 
     def _lan_client_poll(self, dt: float) -> None:
         if not self.lan_link:
             return
+        self.snapshot_age = min(
+            NETWORK_SNAPSHOT_INTERVAL, self.snapshot_age + dt,
+        )
         # Drain whatever already arrived before checking the connection flag -
         # a graceful "host_left" is usually sitting in the queue right before
         # the socket reports closed, and it explains *why* far better than a
         # generic disconnect message would.
         for msg in self.lan_link.poll():
             mtype = msg.get("type")
-            if mtype == "state":
+            if mtype == "start":
+                self._lan_begin_session("client")
+            elif mtype == "state":
                 self.apply_snapshot(msg)
             elif mtype == "chat":
                 self._on_chat_message(msg)
+            elif mtype == "_slot_gone":
+                label = SLOT_LABEL.get(msg.get("slot"), "A player")
+                self.toast_queue.append(("Player Left", f"{label} left the match", 3.0))
             elif mtype == "host_left":
                 self.lan_error_msg = "Host ended the session."
                 self._lan_teardown()
@@ -793,9 +827,31 @@ class Game:
             self.state = STATE_LAN_ERROR
             return
         self._send_heartbeat_if_due()
-        self._update_trail(dt)
-        self.particles.update(dt)
-        self._update_ambient(dt)
+        if self.state in (STATE_PLAYING, STATE_PAUSED):
+            self._update_trail(dt)
+            self.particles.update(dt)
+            self._update_ambient(dt)
+
+    def _lan_player_left(self, sender: Optional[str]) -> None:
+        """A guest explicitly left (Esc, not a raw drop - see _lan_sync_roster
+        for that case). Kills their snake and tells whoever's left, same as
+        any other death, so the match just continues without them."""
+        if sender not in PTAGS or not self._snake_alive(sender):
+            return
+        self._kill_snake(sender, "Left the game.")
+        if not self.lan_online:  # Online's relay already told everyone else
+            self.lan_link.send({"type": "_slot_gone", "slot": sender})
+
+    def _lan_sync_roster(self) -> None:
+        """Notices a guest's slot vanishing from the channel's roster without
+        an explicit 'they left' message (a raw drop, not a graceful Esc) and
+        treats it exactly like that player's snake dying - the match
+        continues for whoever's left, same as any other death."""
+        current = set(self.lan_link.roster.keys())
+        for slot in self.lan_known_slots - current:
+            if slot != "host":
+                self._lan_player_left(slot)
+        self.lan_known_slots = current
 
     def _lan_host_pause_poll(self) -> None:
         """While the host has the game paused, update_playing() (and its usual
@@ -807,17 +863,14 @@ class Game:
             mtype = msg.get("type")
             if mtype == "chat":
                 self._on_chat_message(msg)
-                continue
-            if mtype == "client_left":
-                self.lan_error_msg = "Player left the game."
-                self._lan_teardown()
-                self.state = STATE_LAN_ERROR
-                return
+            elif mtype == "client_left":
+                self._lan_player_left(msg.get("from"))
             # "input" messages that arrive while paused are intentionally
             # dropped - the client is a pure renderer, queued moves from
             # before the pause shouldn't suddenly fire on resume.
+        self._lan_sync_roster()
         if not self.lan_link.connected:
-            self.lan_error_msg = "Player disconnected."
+            self.lan_error_msg = "Lost your own connection to the game server."
             self._lan_teardown()
             self.state = STATE_LAN_ERROR
             return
@@ -825,17 +878,56 @@ class Game:
 
     # ---------- run lifecycle ----------
 
-    def reset_run(self) -> None:
+    @property
+    def player(self) -> Optional[PlayerSnake]:
+        return self.players[0]
+
+    @player.setter
+    def player(self, v: Optional[PlayerSnake]) -> None:
+        self.players[0] = v
+
+    @property
+    def player2(self) -> Optional[PlayerSnake]:
+        return self.players[1]
+
+    @player2.setter
+    def player2(self, v: Optional[PlayerSnake]) -> None:
+        self.players[1] = v
+
+    @property
+    def player_alive(self) -> bool:
+        return self.players_alive[0]
+
+    @player_alive.setter
+    def player_alive(self, v: bool) -> None:
+        self.players_alive[0] = v
+
+    @property
+    def player2_alive(self) -> bool:
+        return self.players_alive[1]
+
+    @player2_alive.setter
+    def player2_alive(self, v: bool) -> None:
+        self.players_alive[1] = v
+
+    def reset_run(self, match_size: Optional[int] = None) -> None:
         cfg = self.mode_cfg()
         cx, cy = GRID_W // 2, GRID_H // 2
 
-        self.player = PlayerSnake(cx, cy)
-        self.player_alive = True
-        self.player2: Optional[PlayerSnake] = None
-        self.player2_alive = False
-        if cfg["coop"]:
-            self.player2 = PlayerSnake(cx - 6, cy)
-            self.player2_alive = True
+        # match_size: how many snakes THIS run has (1=solo, 2=local Coop, or
+        # 2-4 for LAN/online - the host decides based on who joined before
+        # starting; see _lan_begin_session). Solo/local-coop keep today's
+        # exact behavior; it's only ever 3 or 4 for a network match.
+        if match_size is None:
+            match_size = 2 if cfg["coop"] else 1
+        self.match_size = max(1, min(match_size, MAX_PLAYERS))
+        SPAWN_OFFSETS = [(0, 0), (-6, 0), (6, 0), (0, -6)]
+        self.players = [None, None, None, None]
+        self.players_alive = [False, False, False, False]
+        for i in range(self.match_size):
+            ox, oy = SPAWN_OFFSETS[i]
+            self.players[i] = PlayerSnake(cx + ox, cy + oy)
+            self.players_alive[i] = True
 
         self.rivals: List[EnemySnake] = []
         corners = [(GRID_W - 5, GRID_H - 5), (4, 4), (GRID_W - 5, 4), (4, GRID_H - 5)]
@@ -851,9 +943,7 @@ class Game:
         # gets the chosen map's obstacles, theme, and ambient effect.
         if self.mode_name() != "Daily":
             self.theme = dict(MAP_THEMES.get(self.map_name, DEFAULT_THEME))
-            heads = [(cx, cy)]
-            if cfg["coop"]:
-                heads.append((cx - 6, cy))
+            heads = [p.head for p in self.players if p is not None]
             heads.extend(self.rivals[i].head for i in range(len(self.rivals)))
             self.obstacles |= {
                 cell for cell in MAPS.get(self.map_name, set())
@@ -974,14 +1064,14 @@ class Game:
             for msg in self.lan_link.poll():
                 mtype = msg.get("type")
                 if mtype == "input":
+                    sender = msg.get("from")
                     d = msg.get("dir")
-                    if isinstance(d, list) and len(d) == 2 and self.player2:
-                        self.player2.set_direction((int(d[0]), int(d[1])))
+                    if sender in PTAGS[1:] and isinstance(d, list) and len(d) == 2:
+                        idx = PTAGS.index(sender)
+                        if self.players[idx] is not None:
+                            self.players[idx].set_direction((int(d[0]), int(d[1])))
                 elif mtype == "client_left":
-                    self.lan_error_msg = "Player left the game."
-                    self._lan_teardown()
-                    self.state = STATE_LAN_ERROR
-                    return
+                    self._lan_player_left(msg.get("from"))
                 elif mtype == "chat":
                     self._on_chat_message(msg)
                 elif mtype == "chat_pause_request":
@@ -989,8 +1079,9 @@ class Game:
                     self.state = STATE_PAUSED
                     self.lan_link.send({"type": "paused"})
                     return
+            self._lan_sync_roster()
             if not self.lan_link.connected:
-                self.lan_error_msg = "Player disconnected."
+                self.lan_error_msg = "Lost your own connection to the game server."
                 self._lan_teardown()
                 self.state = STATE_LAN_ERROR
                 return
@@ -1067,7 +1158,8 @@ class Game:
         if new_p:
             self.powerups.append(new_p)
 
-        if cfg["coop"] and self.player2 is not None and self.player_alive != self.player2_alive:
+        active = self.players_alive[:self.match_size]
+        if cfg["coop"] and any(active) and not all(active):
             if not any(p.kind == POWERUP_REVIVE for p in self.powerups) and random.random() < 0.015:
                 rx, ry = random_free_cell(self.occupied_cells())
                 self.powerups.append(PowerUp(rx, ry, POWERUP_REVIVE))
@@ -1088,11 +1180,9 @@ class Game:
 
         self.move_accum += dt
         interval = self.move_interval()
-        ticked = False
         if self.move_accum >= interval:
             self.move_accum -= interval
             self._tick()
-            ticked = True
 
         if self.zoom_timer > 0:
             self.zoom_timer = max(0.0, self.zoom_timer - dt)
@@ -1139,10 +1229,8 @@ class Game:
         self._update_ambient(dt)
 
         if self.lan_role == "host" and self.lan_link and self.lan_link.connected:
-            # LAN sends every frame; online sends on each snake move plus a
-            # slow floor for timers, to keep relay traffic small.
             self.snapshot_accum += dt
-            if ticked or self.snapshot_accum >= self.lan_link.snapshot_min_gap:
+            if self.snapshot_accum >= NETWORK_SNAPSHOT_INTERVAL - 1e-9:
                 self.snapshot_accum = 0.0
                 self.lan_link.send(self._build_snapshot())
 
@@ -1238,11 +1326,14 @@ class Game:
         self.particles.burst(px, py, self.powerup_color(kind), count=18)
 
     def _revive_teammate(self) -> None:
-        if self.player2 is None or self.player_alive == self.player2_alive:
-            return  # nothing to revive, or both already down/up
-        dead_tag = "p1" if not self.player_alive else "p2"
-        reviver = self.player2 if dead_tag == "p1" else self.player
-        dead_snake = self.player if dead_tag == "p1" else self.player2
+        active = self.players_alive[:self.match_size]
+        if not any(active) or all(active):
+            return  # nothing to revive, or everyone already down/up
+        dead_idx = next(i for i in range(self.match_size) if not self.players_alive[i])
+        reviver_idx = next(i for i in range(self.match_size) if self.players_alive[i])
+        dead_tag = PTAGS[dead_idx]
+        reviver = self.players[reviver_idx]
+        dead_snake = self.players[dead_idx]
 
         occ = self.occupied_cells()
         rx, ry = reviver.head
@@ -1260,10 +1351,7 @@ class Game:
         dead_snake.direction = (1, 0)
         dead_snake.pending_direction = (1, 0)
 
-        if dead_tag == "p1":
-            self.player_alive = True
-        else:
-            self.player2_alive = True
+        self.players_alive[dead_idx] = True
 
         # A brief shared Ghost window so the revived teammate (and their
         # rescuer) can't be insta-killed by whatever was nearby.
@@ -1277,10 +1365,9 @@ class Game:
 
     def _blocking_set(self, exclude_tag: str) -> set:
         s = set(self.obstacles)
-        if exclude_tag != "p1" and self.player_alive:
-            s |= set(self.player.body)
-        if exclude_tag != "p2" and self.player2 and self.player2_alive:
-            s |= set(self.player2.body)
+        for i, snake in enumerate(self.players):
+            if snake is not None and self.players_alive[i] and PTAGS[i] != exclude_tag:
+                s |= set(snake.body)
         for r in self.rivals:
             if r.alive:
                 s |= r.occupies()
@@ -1295,8 +1382,10 @@ class Game:
         movers: List[Tuple[str, PlayerSnake]] = []
         if self.player_alive:
             movers.append(("p1", self.player))
-        if cfg["coop"] and self.player2 and self.player2_alive:
-            movers.append(("p2", self.player2))
+        if cfg["coop"]:
+            for i in range(1, self.match_size):
+                if self.players[i] is not None and self.players_alive[i]:
+                    movers.append((PTAGS[i], self.players[i]))
 
         prev_heads = {}
         for tag, snake in movers:
@@ -1360,7 +1449,7 @@ class Game:
                 rival.step(grow)
 
     def _snake_alive(self, tag: str) -> bool:
-        return self.player_alive if tag == "p1" else self.player2_alive
+        return self.players_alive[PTAGS.index(tag)]
 
     def _check_collision(self, tag: str, snake: PlayerSnake, nx: int, ny: int, ghost: bool, cfg: dict) -> Tuple[bool, str]:
         if ghost:
@@ -1375,10 +1464,13 @@ class Game:
         if (nx, ny) in self.obstacles:
             return True, "You crashed into an obstacle."
 
-        other = self.player2 if tag == "p1" else self.player
-        other_alive = self.player2_alive if tag == "p1" else self.player_alive
-        if cfg["coop"] and other is not None and other_alive and (nx, ny) in set(other.body):
-            return True, "You crashed into your teammate."
+        if cfg["coop"]:
+            my_idx = PTAGS.index(tag)
+            for i, other in enumerate(self.players):
+                if i == my_idx or other is None or not self.players_alive[i]:
+                    continue
+                if (nx, ny) in set(other.body):
+                    return True, "You crashed into your teammate."
         for r in self.rivals:
             if r.alive and (nx, ny) in r.occupies():
                 return True, "The rival snake got you."
@@ -1494,7 +1586,7 @@ class Game:
     # ---------- death / game over ----------
 
     def _kill_snake(self, tag: str, reason: str) -> None:
-        snake = self.player if tag == "p1" else self.player2
+        snake = self.players[PTAGS.index(tag)]
         for i, (bx, by) in enumerate(snake.body):
             px, py = grid_to_px(*self._center((bx, by)))
             color = (255, 255, 255) if i == 0 else SNAKE_SKINS[SKIN_NAMES[self.skin_idx]][1]
@@ -1502,10 +1594,7 @@ class Game:
         self.shake(0.4, 7)
         self.sounds.play(self.sounds.death)
 
-        if tag == "p1":
-            self.player_alive = False
-        else:
-            self.player2_alive = False
+        self.players_alive[PTAGS.index(tag)] = False
         self.last_death_reason[tag] = reason
 
         cfg = self.mode_cfg()
@@ -1514,10 +1603,10 @@ class Game:
             self.death_pause_timer = DEATH_PAUSE_SECONDS
             return
 
-        if not self.player_alive and not self.player2_alive:
-            p1r = self.last_death_reason.get("p1", "-")
-            p2r = self.last_death_reason.get("p2", "-")
-            self.game_over_reason = f"P1: {p1r}   P2: {p2r}"
+        if not any(self.players_alive[i] for i in range(self.match_size)):
+            parts = [f"{PLAYER_LABELS[i]}: {self.last_death_reason.get(PTAGS[i], '-')}"
+                     for i in range(self.match_size)]
+            self.game_over_reason = "   ".join(parts)
             self.death_pause_timer = DEATH_PAUSE_SECONDS
 
     def _time_up(self) -> None:
@@ -1860,8 +1949,10 @@ class Game:
         skin = SNAKE_SKINS[SKIN_NAMES[self.skin_idx]]
         ghost_active = POWERUP_GHOST in self.active_powerups
         self._draw_snake(board, self.player, skin, alpha, ghost_active, self.player_alive, "p1")
-        if self.player2:
-            self._draw_snake(board, self.player2, P2_COLOR, alpha, ghost_active, self.player2_alive, "p2")
+        for i in range(1, self.match_size):
+            if self.players[i] is not None:
+                self._draw_snake(board, self.players[i], PLAYER_COLORS[i], alpha, ghost_active,
+                                  self.players_alive[i], PTAGS[i])
 
         if POWERUP_SHIELD in self.active_powerups and self.player_alive:
             hx, hy = self.player.render_positions(alpha)[0]
@@ -1935,15 +2026,17 @@ class Game:
             screen.blit(font_tiny.render(ghost_text, True, ghost_color), (x, y))
             y += 20
 
-        if self.player2:
-            p2_status = "alive" if self.player2_alive else "down"
-            p2_color = TEXT if self.player2_alive else DANGER
-            screen.blit(font_tiny.render(f"P2: {p2_status}  len {len(self.player2.body)}", True, p2_color), (x, y))
-            y += 20
-            p1_status = "alive" if self.player_alive else "down"
-            p1_color = TEXT if self.player_alive else DANGER
-            screen.blit(font_tiny.render(f"P1: {p1_status}", True, p1_color), (x, y))
-            y += 20
+        if self.match_size > 1:
+            for i in range(self.match_size - 1, -1, -1):  # P2.. first, P1 last (unchanged order)
+                snake = self.players[i]
+                if snake is None:
+                    continue
+                alive = self.players_alive[i]
+                status = "alive" if alive else "down"
+                color = TEXT if alive else DANGER
+                extra = f"  len {len(snake.body)}" if i > 0 else ""
+                screen.blit(font_tiny.render(f"{PLAYER_LABELS[i]}: {status}{extra}", True, color), (x, y))
+                y += 20
 
         if self.curse_timer > 0:
             screen.blit(font_tiny.render(f"CURSED: controls reversed! {self.curse_timer:0.1f}s", True, self.food_color(FOOD_CURSE)), (x, y))
@@ -2391,30 +2484,76 @@ class Game:
     def draw_lan_host_wait(self) -> None:
         screen.fill(BG)
         dots = "." * (1 + int(pygame.time.get_ticks() / 400) % 3)
-        t = font_big.render("HOSTING ONLINE" if self.lan_online else "HOSTING", True, ACCENT)
-        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 100))
+        is_host = self.lan_role != "client"
+        label = "HOSTING ONLINE" if (is_host and self.lan_online) else ("HOSTING" if is_host else "JOINED")
+        t = font_big.render(label, True, ACCENT)
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 90))
 
-        if self.lan_online:
-            code = self.lan_host.code if self.lan_host else None
-            if code:
-                code_r = font_big.render(f"Room code:  {code}", True, GOLD)
-                share = "Send this code to your friend - they pick Join Online Game."
+        if is_host:
+            if self.lan_online:
+                code = self.lan_host.code if self.lan_host else None
+                if code:
+                    code_r = font_big.render(f"Room code:  {code}", True, GOLD)
+                    share = "Send this code to friends - up to 3 can join (Join Online Game)."
+                else:
+                    code_r = font_mid.render(f"Creating room{dots}", True, GOLD)
+                    share = "Connecting to the online server."
+                screen.blit(code_r, (SCREEN_W // 2 - code_r.get_width() // 2, 150))
             else:
-                code_r = font_mid.render(f"Creating room{dots}", True, GOLD)
-                share = "Connecting to the online server."
-            screen.blit(code_r, (SCREEN_W // 2 - code_r.get_width() // 2, 165))
+                ip_r = font_mid.render(f"IP: {self.local_ip}   Port: {network.DEFAULT_PORT}", True, GOLD)
+                screen.blit(ip_r, (SCREEN_W // 2 - ip_r.get_width() // 2, 150))
+                share = "Share this with friends on your network - up to 3 can join."
+            share_r = font_small.render(share, True, TEXT_DIM)
+            screen.blit(share_r, (SCREEN_W // 2 - share_r.get_width() // 2, 190))
         else:
-            ip_r = font_mid.render(f"IP: {self.local_ip}   Port: {network.DEFAULT_PORT}", True, GOLD)
-            screen.blit(ip_r, (SCREEN_W // 2 - ip_r.get_width() // 2, 170))
-            share = "Share this with the other player on your network."
-        share_r = font_small.render(share, True, TEXT_DIM)
-        screen.blit(share_r, (SCREEN_W // 2 - share_r.get_width() // 2, 210))
+            waiting_r = font_mid.render(f"Waiting for the host to start{dots}", True, TEXT)
+            screen.blit(waiting_r, (SCREEN_W // 2 - waiting_r.get_width() // 2, 160))
 
         setup_r = font_small.render(f"Ruleset: {self.lan_ruleset_name}   Map: {self.map_name}", True, TEXT)
-        screen.blit(setup_r, (SCREEN_W // 2 - setup_r.get_width() // 2, 240))
+        screen.blit(setup_r, (SCREEN_W // 2 - setup_r.get_width() // 2, 220))
 
-        waiting_r = font_mid.render(f"Waiting for player to join{dots}", True, TEXT)
-        screen.blit(waiting_r, (SCREEN_W // 2 - waiting_r.get_width() // 2, 290))
+        y = 260
+        if is_host:
+            # The host's channel always knows the real roster (LAN tracks it
+            # directly; Online gets it from the relay).
+            channel = self.lan_host.link if self.lan_online else self.lan_host
+            roster = dict(channel.roster) if channel else {"host": True}
+            roster_label = font_small.render("Players:", True, TEXT_DIM)
+            screen.blit(roster_label, (SCREEN_W // 2 - 90, y))
+            y += 26
+            for slot in ["host"] + network.GUEST_SLOTS:
+                if slot not in roster:
+                    continue
+                up = roster[slot]
+                tag = " (you)" if slot == "host" else ""
+                color = TEXT if up else TEXT_DIM
+                row = font_small.render(f"  {SLOT_LABEL[slot]}{tag} - {'connected' if up else 'reconnecting...'}", True, color)
+                screen.blit(row, (SCREEN_W // 2 - 90, y))
+                y += 24
+            ready = len(roster) > 1
+            hint = "Enter: start match" if ready else "Waiting for at least one player..."
+            hint_r = font_mid.render(hint, True, GOLD if ready else TEXT_DIM)
+            screen.blit(hint_r, (SCREEN_W // 2 - hint_r.get_width() // 2, y + 10))
+        elif self.lan_online:
+            # Online guests DO get the real roster from the relay.
+            roster = dict(self.lan_link.roster) if self.lan_link else {}
+            for slot in ["host"] + network.GUEST_SLOTS:
+                if slot not in roster:
+                    continue
+                me = getattr(self.lan_link, "my_slot", None) == slot
+                row = font_small.render(f"  {SLOT_LABEL[slot]}{' (you)' if me else ''}", True, TEXT)
+                screen.blit(row, (SCREEN_W // 2 - 90, y))
+                y += 24
+        else:
+            # A LAN guest's own socket has no visibility into who ELSE has
+            # joined (unlike the host, or Online where the relay tells
+            # everyone) - say so rather than guess.
+            note = font_tiny.render("(other players may have joined too - the host can see everyone)", True, TEXT_DIM)
+            screen.blit(note, (SCREEN_W // 2 - note.get_width() // 2, y))
+
+        if self.lan_toast and pygame.time.get_ticks() / 1000.0 < self.lan_toast_until:
+            toast_r = font_tiny.render(self.lan_toast, True, DANGER)
+            screen.blit(toast_r, (SCREEN_W // 2 - toast_r.get_width() // 2, SCREEN_H - 66))
 
         foot = font_small.render("Esc: cancel", True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 40))
@@ -3150,6 +3289,28 @@ class Game:
             elif choice == "Back":
                 self.state = STATE_MENU
 
+    def handle_lan_host_wait_key(self, key) -> None:
+        """The lobby screen, shared by host and guest (see draw_lan_host_wait).
+        The host can start once at least one guest has joined; a guest just
+        waits here until the host does, or leaves."""
+        if self.lan_role == "host":
+            channel = self.lan_host.link if self.lan_online else self.lan_host
+            if key == pygame.K_RETURN and channel and len(channel.roster) > 1:
+                self.sounds.play(self.sounds.menu_select)
+                match_size = len(channel.roster)
+                channel.send({"type": "start"})
+                self._lan_begin_session("host", match_size=match_size)
+            elif key == pygame.K_ESCAPE:
+                self._lan_teardown()
+                self.lan_cfg_override = None
+                self.state = STATE_LAN_MENU
+        else:
+            if key == pygame.K_ESCAPE:
+                if self.lan_link:
+                    self.lan_link.send({"type": "client_left"})
+                self._lan_teardown()
+                self.state = STATE_LAN_MENU
+
     def handle_lan_setup_key(self, key) -> None:
         n = len(LAN_SETUP_ITEMS)
         if key in (pygame.K_UP, pygame.K_w):
@@ -3517,12 +3678,7 @@ class Game:
         elif self.state == STATE_MAP_SELECT:
             self.handle_map_select_key(key)
         elif self.state == STATE_LAN_HOST_WAIT:
-            if key == pygame.K_ESCAPE:
-                if self.lan_host:
-                    self.lan_host.close()
-                self.lan_host = None
-                self.lan_cfg_override = None
-                self.state = STATE_LAN_MENU
+            self.handle_lan_host_wait_key(key)
         elif self.state == STATE_LAN_JOIN_IP:
             self.handle_lan_join_ip_key(key)
         elif self.state == STATE_ONLINE_JOIN_CODE:
@@ -3576,7 +3732,10 @@ class Game:
             elif self.state == STATE_EASTER_WARNING:
                 self.particles.update(dt)
             elif self.state == STATE_LAN_HOST_WAIT:
-                self._lan_host_poll()
+                if self.lan_role == "client":
+                    self._lan_client_poll(dt)
+                else:
+                    self._lan_host_poll()
             elif self.state == STATE_LAN_CONNECTING:
                 self._lan_connecting_poll()
             elif self.state == STATE_PAUSED and self.lan_role == "host":
@@ -3590,7 +3749,10 @@ class Game:
                 else:
                     self.update_playing(dt)
                 if self.state == STATE_PLAYING:
-                    alpha = 1.0 if self.lan_role else min(1.0, self.move_accum / self.move_interval())
+                    if self.lan_role == "client":
+                        alpha = min(1.0, self.snapshot_age / NETWORK_SNAPSHOT_INTERVAL)
+                    else:
+                        alpha = 1.0 if self.lan_role else min(1.0, self.move_accum / self.move_interval())
                     self.draw_playing(alpha)
                     self.draw_sidebar()
                     self._draw_net_banner()

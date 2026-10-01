@@ -24,6 +24,11 @@ CURSE_COLOR = (170, 0, 110)
 PORTAL_A = (80, 200, 255)
 PORTAL_B = (255, 120, 220)
 P2_COLOR = [(255, 170, 80), (210, 120, 40)]
+P3_COLOR = [(120, 200, 255), (70, 140, 210)]
+P4_COLOR = [(230, 120, 255), (170, 70, 210)]
+PLAYER_COLORS = [None, P2_COLOR, P3_COLOR, P4_COLOR]  # index 0 (host) uses its chosen skin instead
+PLAYER_LABELS = ["P1", "P2", "P3", "P4"]
+MAX_PLAYERS = 4
 
 SNAKE_SKINS = {
     "Classic": [(110, 230, 140), (70, 180, 110)],
@@ -354,7 +359,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.9.0"
+GAME_VERSION = "1.9.1"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker),
 # deployed 2026-10-01 to a free *.workers.dev subdomain. The MEGASNAKE_SERVER
@@ -364,6 +369,10 @@ ONLINE_SERVER_URL = "wss://megasnake-online.megasnake-online.workers.dev"
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.9.1", [
+        "LAN and Online multiplayer now support up to four players",
+        "Reduced multiplayer bandwidth with capped state snapshots and smoother remote rendering",
+    ]),
     ("1.9.0", [
         "Online Multiplayer is live! Host or Join Online Game from Multiplayer",
         "- no port forwarding, works over the internet, just a 5-letter room code",
