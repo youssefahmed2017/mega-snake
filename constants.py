@@ -356,6 +356,12 @@ SECRET_SHOP_ITEMS = [
 
 GAME_VERSION = "1.8.3"
 
+# Online multiplayer relay (server/ in this repo, a Cloudflare Worker). Empty
+# until it's deployed, which hides online play behind a friendly message.
+# The MEGASNAKE_SERVER env var overrides it, e.g. ws://127.0.0.1:8787 for a
+# local `wrangler dev`.
+ONLINE_SERVER_URL = ""
+
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [

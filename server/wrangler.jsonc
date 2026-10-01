@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "megasnake-online",
+  "main": "src/index.js",
+  "compatibility_date": "2026-06-01",
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }]
+  // To serve it on a custom subdomain once the domain owner approves, add:
+  // "routes": [{ "pattern": "snake.example.com", "custom_domain": true }]
+}

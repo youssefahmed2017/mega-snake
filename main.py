@@ -12,6 +12,7 @@ breakdown, persistent per-mode leaderboard.
 from __future__ import annotations
 
 import datetime
+import os
 import random
 import sys
 import tempfile
@@ -33,7 +34,7 @@ from constants import (
     PORTAL_A, PORTAL_B, MODES, MODE_CONFIG, MODE_DESC, DIFFICULTIES, DIFFICULTY_SPEED_MULT,
     GAME_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
     LAN_RULESETS, LAN_RULESET_NAMES, MAPS, MAP_NAMES, MAP_THEMES, DEFAULT_THEME,
-    EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS,
+    EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS, ONLINE_SERVER_URL,
 )
 from snake import PlayerSnake
 from enemy import EnemySnake
@@ -76,6 +77,7 @@ STATE_LAN_HOST_WAIT = "lan_host_wait"
 STATE_LAN_JOIN_IP = "lan_join_ip"
 STATE_LAN_CONNECTING = "lan_connecting"
 STATE_LAN_ERROR = "lan_error"
+STATE_ONLINE_JOIN_CODE = "online_join_code"
 STATE_HOWTO = "howto"
 STATE_QUESTS = "quests"
 STATE_UPDATE_CHECK = "update_check"
@@ -87,13 +89,13 @@ STATE_EASTER_WARNING = "easter_warning"
 STATE_SECRET_SHOP = "secret_shop"
 
 MENU_ITEMS = [
-    "Start Game", "Mode", "Skin", "LAN Multiplayer", "Daily Quests", "Shop", "Settings",
+    "Start Game", "Mode", "Skin", "Multiplayer", "Daily Quests", "Shop", "Settings",
     "How to Play", "Stats", "Leaderboard", "Achievements", "Changelog", "Check for Updates", "Quit",
 ]
 PAUSE_ITEMS = ["Resume", "Restart", "Settings", "Main Menu"]
 LAN_HOST_PAUSE_ITEMS = ["Resume", "Settings", "End Session"]
 SETTINGS_ITEMS = ["Volume", "Difficulty", "Screen Shake", "Mute", "Color Blind Mode", "Back"]
-LAN_MENU_ITEMS = ["Host Game", "Join Game", "Back"]
+LAN_MENU_ITEMS = ["Host LAN Game", "Join LAN Game", "Host Online Game", "Join Online Game", "Back"]
 LAN_SETUP_ITEMS = ["Ruleset", "Map", "Start Hosting"]
 MAP_SETUP_ITEMS = ["Map", "Start Game"]
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -165,6 +167,11 @@ class Game:
         self.lan_cfg_override: Optional[dict] = None
         self.lan_ip_input = ""
         self.lan_error_msg = ""
+        # Online multiplayer reuses every lan_* field above: the only
+        # difference is the transport (network.Online* via the relay).
+        self.lan_online = False
+        self.online_code_input = ""
+        self.snapshot_accum = 0.0
         self.map_setup_index = 0
         self.theme = dict(DEFAULT_THEME)
         self.ambient_particles: List[list] = []  # [x, y, vx, vy, life, max_life, radius]
@@ -348,6 +355,22 @@ class Game:
         self.lan_role = None
         self.lan_cfg_override = None
 
+    def _online_server_url(self) -> str:
+        # MEGASNAKE_SERVER points a dev build at `wrangler dev` (ws://127.0.0.1:8787).
+        return os.environ.get("MEGASNAKE_SERVER") or ONLINE_SERVER_URL
+
+    def _net_issue(self) -> Optional[str]:
+        """What to tell the player while an online link is degraded, or None."""
+        link = self.lan_link
+        if not link or not self.lan_role:
+            return None
+        if link.reconnecting:
+            return "Connection lost - reconnecting..."
+        if not link.peer_present:
+            who = "your friend" if self.lan_role == "host" else "the host"
+            return f"Waiting for {who} to reconnect..."
+        return None
+
     def _build_snapshot(self, game_over: bool = False) -> dict:
         return {
             "type": "state",
@@ -422,6 +445,12 @@ class Game:
 
     def _lan_host_poll(self) -> None:
         if not self.lan_host:
+            return
+        failure = self.lan_host.failure()
+        if failure:
+            self.lan_error_msg = failure
+            self._lan_teardown()
+            self.state = STATE_LAN_ERROR
             return
         link = self.lan_host.poll_new_connection()
         if link:
@@ -657,6 +686,11 @@ class Game:
                 self._lan_teardown()
                 self.state = STATE_LAN_ERROR
                 return
+            if self._net_issue():
+                # Online only: freeze the match while either side's connection
+                # is being re-established, instead of letting the snakes crash.
+                self.particles.update(dt)
+                return
 
         self.time_alive += dt
         self.stats["time_alive"] = self.time_alive
@@ -738,9 +772,11 @@ class Game:
 
         self.move_accum += dt
         interval = self.move_interval()
+        ticked = False
         if self.move_accum >= interval:
             self.move_accum -= interval
             self._tick()
+            ticked = True
 
         if self.zoom_timer > 0:
             self.zoom_timer = max(0.0, self.zoom_timer - dt)
@@ -790,7 +826,12 @@ class Game:
         self._update_ambient(dt)
 
         if self.lan_role == "host" and self.lan_link and self.lan_link.connected:
-            self.lan_link.send(self._build_snapshot())
+            # LAN sends every frame; online sends on each snake move plus a
+            # slow floor for timers, to keep relay traffic small.
+            self.snapshot_accum += dt
+            if ticked or self.snapshot_accum >= self.lan_link.snapshot_min_gap:
+                self.snapshot_accum = 0.0
+                self.lan_link.send(self._build_snapshot())
 
     def _grow_maze(self) -> None:
         occ = self.occupied_cells()
@@ -1472,7 +1513,8 @@ class Game:
         y += 30
         mode_line = f"Mode: {self.mode_name()}  [{self.difficulty}]"
         if self.lan_role:
-            mode_line = f"LAN {'Host' if self.lan_role == 'host' else 'Client'}: {self.lan_ruleset_name}"
+            net = "Online" if self.lan_online else "LAN"
+            mode_line = f"{net} {'Host' if self.lan_role == 'host' else 'Client'}: {self.lan_ruleset_name}"
         screen.blit(font_small.render(mode_line, True, TEXT_DIM), (x, y))
         y += 24
 
@@ -1854,19 +1896,19 @@ class Game:
 
     def draw_lan_menu(self) -> None:
         screen.fill(BG)
-        t = font_big.render("LAN MULTIPLAYER", True, ACCENT)
-        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 60))
+        t = font_big.render("MULTIPLAYER", True, ACCENT)
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 50))
         sub = [
-            "No internet or cloud server needed.",
-            "One player hosts on the local network; the other joins by IP.",
+            "LAN: same Wi-Fi/network, join by IP.",
+            "Online: anywhere with internet, join by room code.",
         ]
-        y = 110
+        y = 100
         for line in sub:
             r = font_small.render(line, True, TEXT_DIM)
             screen.blit(r, (SCREEN_W // 2 - r.get_width() // 2, y))
             y += 22
 
-        y = 200
+        y = 170
         for i, item in enumerate(LAN_MENU_ITEMS):
             selected = i == self.lan_menu_index
             color = ACCENT if selected else TEXT
@@ -1884,18 +1926,29 @@ class Game:
 
     def draw_lan_host_wait(self) -> None:
         screen.fill(BG)
-        t = font_big.render("HOSTING", True, ACCENT)
+        dots = "." * (1 + int(pygame.time.get_ticks() / 400) % 3)
+        t = font_big.render("HOSTING ONLINE" if self.lan_online else "HOSTING", True, ACCENT)
         screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 100))
 
-        ip_r = font_mid.render(f"IP: {self.local_ip}   Port: {network.DEFAULT_PORT}", True, GOLD)
-        screen.blit(ip_r, (SCREEN_W // 2 - ip_r.get_width() // 2, 170))
-        share_r = font_small.render("Share this with the other player on your network.", True, TEXT_DIM)
+        if self.lan_online:
+            code = self.lan_host.code if self.lan_host else None
+            if code:
+                code_r = font_big.render(f"Room code:  {code}", True, GOLD)
+                share = "Send this code to your friend - they pick Join Online Game."
+            else:
+                code_r = font_mid.render(f"Creating room{dots}", True, GOLD)
+                share = "Connecting to the online server."
+            screen.blit(code_r, (SCREEN_W // 2 - code_r.get_width() // 2, 165))
+        else:
+            ip_r = font_mid.render(f"IP: {self.local_ip}   Port: {network.DEFAULT_PORT}", True, GOLD)
+            screen.blit(ip_r, (SCREEN_W // 2 - ip_r.get_width() // 2, 170))
+            share = "Share this with the other player on your network."
+        share_r = font_small.render(share, True, TEXT_DIM)
         screen.blit(share_r, (SCREEN_W // 2 - share_r.get_width() // 2, 210))
 
         setup_r = font_small.render(f"Ruleset: {self.lan_ruleset_name}   Map: {self.map_name}", True, TEXT)
         screen.blit(setup_r, (SCREEN_W // 2 - setup_r.get_width() // 2, 240))
 
-        dots = "." * (1 + int(pygame.time.get_ticks() / 400) % 3)
         waiting_r = font_mid.render(f"Waiting for player to join{dots}", True, TEXT)
         screen.blit(waiting_r, (SCREEN_W // 2 - waiting_r.get_width() // 2, 290))
 
@@ -2012,13 +2065,51 @@ class Game:
         foot = font_tiny.render("Type IP   Enter connect   Backspace delete   Esc cancel", True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
 
+    def draw_online_join_code(self) -> None:
+        screen.fill(BG)
+        t = font_big.render("JOIN ONLINE", True, ACCENT)
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 100))
+        sub = font_small.render("Enter the room code from the host:", True, TEXT_DIM)
+        screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 170))
+
+        box_w, box_h, gap = 52, 60, 12
+        total = network.ROOM_CODE_LEN * box_w + (network.ROOM_CODE_LEN - 1) * gap
+        x0 = SCREEN_W // 2 - total // 2
+        blink = (pygame.time.get_ticks() // 500) % 2 == 0
+        for i in range(network.ROOM_CODE_LEN):
+            rect = pygame.Rect(x0 + i * (box_w + gap), 215, box_w, box_h)
+            active = i == len(self.online_code_input)
+            pygame.draw.rect(screen, (30, 32, 42), rect, border_radius=8)
+            pygame.draw.rect(screen, ACCENT if active else (60, 64, 80), rect, width=2, border_radius=8)
+            ch = self.online_code_input[i] if i < len(self.online_code_input) else ("_" if active and blink else "")
+            if ch:
+                r = font_big.render(ch, True, TEXT)
+                screen.blit(r, (rect.centerx - r.get_width() // 2, rect.centery - r.get_height() // 2))
+
+        foot = font_tiny.render("Type code   Enter join   Backspace delete   Esc cancel", True, TEXT_DIM)
+        screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
+
+    def _draw_net_banner(self) -> None:
+        issue = self._net_issue()
+        if not issue:
+            return
+        play_w = GRID_W * CELL_SIZE
+        overlay = pygame.Surface((play_w, SCREEN_H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 140))
+        screen.blit(overlay, (0, 0))
+        dots = "." * (1 + int(pygame.time.get_ticks() / 400) % 3)
+        r = font_mid.render(issue.rstrip(".") + dots, True, GOLD)
+        screen.blit(r, (play_w // 2 - r.get_width() // 2, SCREEN_H // 2 - 20))
+        hint = font_tiny.render("The match is frozen until the connection is back.", True, TEXT_DIM)
+        screen.blit(hint, (play_w // 2 - hint.get_width() // 2, SCREEN_H // 2 + 16))
+
     def draw_lan_connecting(self) -> None:
         screen.fill(BG)
         t = font_big.render("CONNECTING", True, ACCENT)
         screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 140))
-        ip = self.lan_client.ip if self.lan_client else ""
+        target = self.lan_client.label if self.lan_client else ""
         dots = "." * (1 + int(pygame.time.get_ticks() / 400) % 3)
-        sub = font_mid.render(f"Connecting to {ip}{dots}", True, TEXT)
+        sub = font_mid.render(f"Connecting to {target}{dots}", True, TEXT)
         screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 210))
         foot = font_small.render("Esc: cancel", True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 40))
@@ -2487,7 +2578,7 @@ class Game:
                 else:
                     self.map_setup_index = 0
                     self.state = STATE_MAP_SELECT
-            elif choice == "LAN Multiplayer":
+            elif choice == "Multiplayer":
                 if self.local_ip is None:
                     self.local_ip = network.get_local_ip()
                 self.lan_menu_index = 0
@@ -2574,12 +2665,21 @@ class Game:
         elif key == pygame.K_RETURN:
             self.sounds.play(self.sounds.menu_select)
             choice = LAN_MENU_ITEMS[self.lan_menu_index]
-            if choice == "Host Game":
+            online = "Online" in choice
+            if online and not self._online_server_url():
+                self.lan_error_msg = "Online play isn't switched on in this version yet."
+                self.state = STATE_LAN_ERROR
+                return
+            self.lan_online = online
+            if choice in ("Host LAN Game", "Host Online Game"):
                 self.lan_setup_index = 0
                 self.state = STATE_LAN_SETUP
-            elif choice == "Join Game":
+            elif choice == "Join LAN Game":
                 self.lan_ip_input = ""
                 self.state = STATE_LAN_JOIN_IP
+            elif choice == "Join Online Game":
+                self.online_code_input = ""
+                self.state = STATE_ONLINE_JOIN_CODE
             elif choice == "Back":
                 self.state = STATE_MENU
 
@@ -2608,7 +2708,10 @@ class Game:
                 self.map_name = MAP_NAMES[self.map_idx]
                 self.lan_cfg_override = dict(LAN_RULESETS[self.lan_ruleset_name])
                 try:
-                    self.lan_host = network.Host()
+                    if self.lan_online:
+                        self.lan_host = network.OnlineHost(self._online_server_url(), GAME_VERSION)
+                    else:
+                        self.lan_host = network.Host()
                     self.state = STATE_LAN_HOST_WAIT
                 except OSError as e:
                     self.lan_cfg_override = None
@@ -2653,6 +2756,24 @@ class Game:
                 self.lan_ip_input += chr(key)
             elif key in (pygame.K_PERIOD, pygame.K_KP_PERIOD):
                 self.lan_ip_input += "."
+
+    def handle_online_join_code_key(self, key) -> None:
+        if key == pygame.K_RETURN:
+            if len(self.online_code_input) == network.ROOM_CODE_LEN:
+                self.sounds.play(self.sounds.menu_select)
+                self.lan_client = network.OnlineClient(
+                    self._online_server_url(), self.online_code_input, GAME_VERSION)
+                self.state = STATE_LAN_CONNECTING
+        elif key == pygame.K_BACKSPACE:
+            self.online_code_input = self.online_code_input[:-1]
+        elif key == pygame.K_ESCAPE:
+            self.state = STATE_LAN_MENU
+        elif len(self.online_code_input) < network.ROOM_CODE_LEN:
+            name = pygame.key.name(key)
+            if len(name) == 1 and name.isalnum():
+                ch = network.normalize_room_code(name)
+                if ch in network.ROOM_CODE_CHARS:
+                    self.online_code_input += ch
 
     def handle_shop_key(self, key) -> None:
         items = TRAIL_NAMES + ["Back"]
@@ -2905,10 +3026,14 @@ class Game:
                 self.state = STATE_LAN_MENU
         elif self.state == STATE_LAN_JOIN_IP:
             self.handle_lan_join_ip_key(key)
+        elif self.state == STATE_ONLINE_JOIN_CODE:
+            self.handle_online_join_code_key(key)
         elif self.state == STATE_LAN_CONNECTING:
             if key == pygame.K_ESCAPE:
+                if self.lan_client:
+                    self.lan_client.close()
                 self.lan_client = None
-                self.state = STATE_LAN_JOIN_IP
+                self.state = STATE_ONLINE_JOIN_CODE if self.lan_online else STATE_LAN_JOIN_IP
         elif self.state == STATE_LAN_ERROR:
             if key in (pygame.K_RETURN, pygame.K_ESCAPE):
                 self._lan_teardown()
@@ -2966,6 +3091,7 @@ class Game:
                     alpha = 1.0 if self.lan_role else min(1.0, self.move_accum / self.move_interval())
                     self.draw_playing(alpha)
                     self.draw_sidebar()
+                    self._draw_net_banner()
             elif self.state == STATE_PAUSED:
                 self.draw_playing(1.0)
                 self.draw_sidebar()
@@ -2998,6 +3124,8 @@ class Game:
                 self.draw_lan_host_wait()
             elif self.state == STATE_LAN_JOIN_IP:
                 self.draw_lan_join_ip()
+            elif self.state == STATE_ONLINE_JOIN_CODE:
+                self.draw_online_join_code()
             elif self.state == STATE_LAN_CONNECTING:
                 self.draw_lan_connecting()
             elif self.state == STATE_LAN_ERROR:
