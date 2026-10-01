@@ -132,6 +132,32 @@ CHAT_MAX_LEN = 200
 CHAT_MAX_LOG = 50
 CHAT_VISIBLE = 6
 CHAT_COOLDOWN = 0.35
+
+# While paused, neither side sent any traffic at all before chat existed -
+# nothing needed to. Some Wi-Fi drivers power-save a radio that's gone quiet,
+# and some routers drop an idle NAT mapping, either of which silently kills
+# the TCP connection; the game then only notices (and shows "disconnected")
+# once something finally touches the dead socket. A small periodic heartbeat
+# keeps real traffic flowing so that never has the chance to happen.
+LAN_HEARTBEAT_SECONDS = 4.0
+
+
+def _clean_chat_text(text: str) -> str:
+    """Strips control characters and, critically, lone UTF-16 surrogates.
+
+    SDL/Windows has a known bug where typing an emoji through the OS emoji
+    picker can deliver a TEXTINPUT event containing one half of a surrogate
+    pair on its own. That character is valid as a Python str (Python allows
+    lone surrogates internally) but has no UTF-8 representation, so font
+    rendering raises UnicodeEncodeError the moment it's drawn - uncaught,
+    that kills the whole process, which looks like the other player's game
+    just vanished ("Host/Player disconnected"). The bad char also survives
+    a JSON round-trip intact (json doesn't validate it either), so it has to
+    be filtered on both the way in (typing) and the way out (received).
+    """
+    return "".join(ch for ch in text if ord(ch) >= 32 and not (0xD800 <= ord(ch) <= 0xDFFF))
+
+
 # How long each cell of a shop trail lingers behind the tail before fading out.
 TRAIL_LIFE = 0.7
 
@@ -232,6 +258,7 @@ class Game:
         # no pause authority of its own); this remembers to open chat once
         # that pause actually comes back, instead of needing a second T press.
         self.chat_pending_open = False
+        self.lan_heartbeat_last = 0.0
         self.map_setup_index = 0
         self.theme = dict(DEFAULT_THEME)
         self.ambient_particles: List[list] = []  # [x, y, vx, vy, life, max_life, radius]
@@ -556,10 +583,20 @@ class Game:
         self.chat_input = ""
         pygame.key.stop_text_input()
 
+    def _send_heartbeat_if_due(self) -> None:
+        """See LAN_HEARTBEAT_SECONDS. "ping" needs no receiver-side handling -
+        any message type nothing recognizes is already silently dropped."""
+        if not self.lan_link or not self.lan_link.connected:
+            return
+        now = pygame.time.get_ticks() / 1000.0
+        if now - self.lan_heartbeat_last >= LAN_HEARTBEAT_SECONDS:
+            self.lan_heartbeat_last = now
+            self.lan_link.send({"type": "ping"})
+
     def handle_chat_text(self, text: str) -> None:
         """pygame.TEXTINPUT gives fully composed Unicode text (proper IME/dead-key
         support), unlike KEYDOWN which only covers keys pygame has a K_* for."""
-        text = "".join(ch for ch in text if ord(ch) >= 32)
+        text = _clean_chat_text(text)
         if not text:
             return
         room = CHAT_MAX_LEN - len(self.chat_input)
@@ -595,7 +632,7 @@ class Game:
             self.chat_unread += 1
 
     def _on_chat_message(self, msg: dict) -> None:
-        text = "".join(ch for ch in str(msg.get("text", "")) if ord(ch) >= 32)[:CHAT_MAX_LEN]
+        text = _clean_chat_text(str(msg.get("text", "")))[:CHAT_MAX_LEN]
         if not text:
             return
         self._append_chat("Friend", text)
@@ -666,6 +703,7 @@ class Game:
             self._lan_teardown()
             self.state = STATE_LAN_ERROR
             return
+        self._send_heartbeat_if_due()
         self._update_trail(dt)
         self.particles.update(dt)
         self._update_ambient(dt)
@@ -693,6 +731,8 @@ class Game:
             self.lan_error_msg = "Player disconnected."
             self._lan_teardown()
             self.state = STATE_LAN_ERROR
+            return
+        self._send_heartbeat_if_due()
 
     # ---------- run lifecycle ----------
 
@@ -1955,12 +1995,20 @@ class Game:
     def _safe_render_chat(self, text: str, color) -> pygame.Surface:
         """font_chat covers emoji/most symbols/many accents as one font, but it's
         not true per-character fallback, so a handful of scripts may still have
-        no glyph. Never let a weird paste crash the game over it."""
+        no glyph. _clean_chat_text() already strips what's known to break
+        rendering (see its docstring), but this is the last line of defense:
+        never let any text - a weird paste, a bug upstream, anything - crash
+        the game over it. UnicodeEncodeError is caught alongside pygame.error
+        because an unencodable character (e.g. a lone surrogate) raises that,
+        not a pygame error."""
         try:
             return font_chat.render(text, True, color)
-        except pygame.error:
+        except (pygame.error, UnicodeError):
             cleaned = "".join(ch if ch.isascii() else "?" for ch in text)
-            return font_chat.render(cleaned or "?", True, color)
+            try:
+                return font_chat.render(cleaned or "?", True, color)
+            except (pygame.error, UnicodeError):
+                return font_chat.render("?", True, color)
 
     def _draw_chat_panel(self) -> None:
         # Narrow enough, still centered like the rest of the pause screen, to
