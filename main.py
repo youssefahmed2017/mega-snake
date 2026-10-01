@@ -83,38 +83,15 @@ font_mid = pygame.font.Font(_FONT_PATH, 24)
 font_mid.set_bold(True)
 font_small = pygame.font.Font(_FONT_PATH, 16)
 font_tiny = pygame.font.Font(_FONT_PATH, 13)
-def _pick_chat_font(size: int) -> pygame.font.Font:
-    """Chat needs far broader Unicode coverage than the UI's plain monospace
-    font (Consolas-style fonts have no emoji/CJK/etc. glyphs). Confirmed on
-    Windows, Segoe UI Emoji covers Latin, accents, many symbols/arrows, AND
-    monochrome emoji in one font. But the equivalent pick on another OS can
-    be an EMOJI-ONLY font with no plain-text glyphs at all - macOS's "Apple
-    Color Emoji" has none. SDL_ttf doesn't error on that, it just silently
-    renders nothing, so this is invisible rather than crashing: the chat
-    panel's border/label still draw (different font), but every message and
-    the typed input are blank - not even the cursor shows. Render a plain
-    ASCII test string and check it actually produced visible glyphs before
-    trusting a candidate; fall back to the UI's own font (no emoji, but
-    never invisible) if nothing does."""
-    candidates = [
-        "segoeuiemoji", "notocoloremoji", "applecoloremoji",
-        "notosans", "dejavusans", "segoeui", "helvetica", "arial",
-    ]
-    test = "Aa1|"
-    for name in candidates:
-        path = pygame.font.match_font(name)
-        if not path:
-            continue
-        try:
-            f = pygame.font.Font(path, size)
-            if f.size(test)[0] >= len(test) * 4:  # a real glyph run, not near-empty
-                return f
-        except pygame.error:
-            continue
-    return pygame.font.Font(_FONT_PATH, size)  # same font every other label uses
-
-
-font_chat = _pick_chat_font(17)
+# Chat used to pick a separate "broad coverage" font for emoji/Unicode (first
+# Segoe UI Emoji, later a per-character fallback scheme). Both attempts still
+# left chat text completely invisible on macOS with no clear way to diagnose
+# why without a Mac to test on. Dropped entirely for now: chat renders with
+# the exact same font every other label already uses correctly on every OS,
+# and only plain ASCII is accepted (see _clean_chat_text) - no font-coverage
+# guessing left at all. If chat is still broken after this, the bug provably
+# isn't about fonts or Unicode, which narrows things down a lot.
+font_chat = pygame.font.Font(_FONT_PATH, 17)
 
 SKIN_NAMES = list(SNAKE_SKINS.keys())
 
@@ -174,19 +151,13 @@ LAN_HANDSHAKE_TIMEOUT = 3.0
 
 
 def _clean_chat_text(text: str) -> str:
-    """Strips control characters and, critically, lone UTF-16 surrogates.
-
-    SDL/Windows has a known bug where typing an emoji through the OS emoji
-    picker can deliver a TEXTINPUT event containing one half of a surrogate
-    pair on its own. That character is valid as a Python str (Python allows
-    lone surrogates internally) but has no UTF-8 representation, so font
-    rendering raises UnicodeEncodeError the moment it's drawn - uncaught,
-    that kills the whole process, which looks like the other player's game
-    just vanished ("Host/Player disconnected"). The bad char also survives
-    a JSON round-trip intact (json doesn't validate it either), so it has to
-    be filtered on both the way in (typing) and the way out (received).
-    """
-    return "".join(ch for ch in text if ord(ch) >= 32 and not (0xD800 <= ord(ch) <= 0xDFFF))
+    """Printable ASCII only, deliberately - see font_chat's comment for why.
+    This is temporary: dropping emoji/Unicode support rules out font/glyph
+    coverage as the cause of chat being invisible on macOS. A lone UTF-16
+    surrogate (a known SDL/Windows emoji-picker bug - see git history) would
+    crash rendering with an uncaught UnicodeEncodeError if it ever got
+    through, but printable-ASCII-only already can't admit one regardless."""
+    return "".join(ch for ch in text if 32 <= ord(ch) < 127)
 
 
 # How long each cell of a shop trail lingers behind the tail before fading out.
@@ -2120,16 +2091,13 @@ class Game:
             self._draw_chat_panel()
 
     def _safe_render_chat(self, text: str, color) -> pygame.Surface:
-        """font_chat covers emoji/most symbols/many accents as one font, but it's
-        not true per-character fallback, so a handful of scripts may still have
-        no glyph. _clean_chat_text() already strips what's known to break
-        rendering (see its docstring), but this is the last line of defense:
-        never let any text - a weird paste, a bug upstream, anything - crash
-        the game over it. UnicodeEncodeError is caught alongside pygame.error
-        because an unencodable character (e.g. a lone surrogate) raises that,
-        not a pygame error."""
+        """font_chat is just the game's own, already-proven-everywhere font
+        now (see its comment) - no emoji/Unicode font-picking left to go
+        wrong, and _clean_chat_text() restricts input to printable ASCII
+        before it ever reaches here. This still can't ever raise, as a last
+        line of defense."""
         try:
-            return font_chat.render(text, True, color)
+            return font_chat.render(text or " ", True, color)
         except (pygame.error, UnicodeError):
             cleaned = "".join(ch if ch.isascii() else "?" for ch in text)
             try:

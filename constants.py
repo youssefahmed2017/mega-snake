@@ -354,7 +354,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.8.13"
+GAME_VERSION = "1.8.14"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker). Empty
 # until it's deployed, which hides online play behind a friendly message.
@@ -365,6 +365,10 @@ ONLINE_SERVER_URL = ""
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.8.14", [
+        "Chat is plain ASCII only for now (emoji/Unicode temporarily dropped)",
+        "to rule out font rendering as the cause of chat being broken on Mac",
+    ]),
     ("1.8.13", [
         "Fixed chat being completely invisible on macOS (not even the cursor)",
         "- the emoji font it picked there had no glyphs for plain text at all",
