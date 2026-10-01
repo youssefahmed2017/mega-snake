@@ -33,6 +33,7 @@ from constants import (
     PORTAL_A, PORTAL_B, MODES, MODE_CONFIG, MODE_DESC, DIFFICULTIES, DIFFICULTY_SPEED_MULT,
     GAME_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
     LAN_RULESETS, LAN_RULESET_NAMES, MAPS, MAP_NAMES, MAP_THEMES, DEFAULT_THEME,
+    EASTER_MASH_THRESHOLD, EASTER_WARNINGS, SECRET_SHOP_ITEMS,
 )
 from snake import PlayerSnake
 from enemy import EnemySnake
@@ -82,6 +83,8 @@ STATE_UPDATE_PROMPT = "update_prompt"
 STATE_UPDATE_NONE = "update_none"
 STATE_UPDATE_DOWNLOAD = "update_download"
 STATE_UPDATE_ERROR = "update_error"
+STATE_EASTER_WARNING = "easter_warning"
+STATE_SECRET_SHOP = "secret_shop"
 
 MENU_ITEMS = [
     "Start Game", "Mode", "Skin", "LAN Multiplayer", "Daily Quests", "Shop", "Settings",
@@ -167,6 +170,9 @@ class Game:
         self.ambient_particles: List[list] = []  # [x, y, vx, vy, life, max_life, radius]
         self._ambient_spawn_accum = 0.0
         self.local_ip: Optional[str] = None
+
+        self.easter_down_count = 0
+        self.easter_stage = 0
 
         # Auto-updater: checks GitHub Releases on a background thread so the
         # UI never blocks. The startup check is silent on "no update" or a
@@ -2354,10 +2360,84 @@ class Game:
         foot = font_small.render("Enter / Esc: back", True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 40))
 
+    def draw_easter_warning(self) -> None:
+        warning = EASTER_WARNINGS[self.easter_stage]
+        ox, oy = self.particles.get_shake_offset() if self.screen_shake_enabled else (0, 0)
+        screen.fill((0, 0, 0))
+
+        t = font_big.render(warning["title"], True, warning["color"])
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2 + ox, 190 + oy))
+
+        y = 250 + oy
+        for line in warning["lines"]:
+            r = font_small.render(line, True, warning["color"])
+            screen.blit(r, (SCREEN_W // 2 - r.get_width() // 2 + ox, y))
+            y += 26
+
+    def draw_secret_shop(self) -> None:
+        t_anim = pygame.time.get_ticks() / 1000.0
+        screen.fill((4, 2, 8))
+
+        # A slow rainbow sweep across the whole backdrop.
+        for i in range(0, SCREEN_W, 4):
+            hue = ((i / SCREEN_W) + t_anim * 0.08) % 1.0
+            r, g, b = colorsys.hsv_to_rgb(hue, 0.55, 0.12)
+            pygame.draw.line(screen, (int(r * 255), int(g * 255), int(b * 255)), (i, 0), (i, SCREEN_H))
+
+        title_hue = (t_anim * 0.15) % 1.0
+        tr, tg, tb = colorsys.hsv_to_rgb(title_hue, 0.7, 1.0)
+        t = font_big.render("??? SHOP ???", True, (int(tr * 255), int(tg * 255), int(tb * 255)))
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 30))
+
+        card_w, card_h, gap = 230, 110, 16
+        cols = 3
+        grid_w = cols * card_w + (cols - 1) * gap
+        x0 = SCREEN_W // 2 - grid_w // 2
+        y0 = 100
+        for i, (name, price, desc) in enumerate(SECRET_SHOP_ITEMS):
+            col, row = i % cols, i // cols
+            x = x0 + col * (card_w + gap)
+            y = y0 + row * (card_h + gap)
+            hue = ((i / len(SECRET_SHOP_ITEMS)) + t_anim * 0.1) % 1.0
+            cr, cg, cb = colorsys.hsv_to_rgb(hue, 0.6, 0.9)
+            border = (int(cr * 255), int(cg * 255), int(cb * 255))
+
+            rect = pygame.Rect(x, y, card_w, card_h)
+            pygame.draw.rect(screen, (16, 14, 22), rect, border_radius=10)
+            pygame.draw.rect(screen, border, rect, width=2, border_radius=10)
+            name_r = font_small.render(name, True, TEXT)
+            screen.blit(name_r, (x + 12, y + 10))
+            price_r = font_tiny.render(price, True, border)
+            screen.blit(price_r, (x + 12, y + 36))
+            desc_r = font_tiny.render(desc, True, TEXT_DIM)
+            screen.blit(desc_r, (x + 12, y + 60))
+            # A simple drawn padlock instead of an emoji glyph, which several
+            # of pygame's bundled fonts render as a fallback "tofu" box.
+            lx, ly = x + card_w - 28, y + card_h - 26
+            pygame.draw.rect(screen, TEXT_DIM, (lx, ly + 5, 14, 10), border_radius=2)
+            pygame.draw.arc(screen, TEXT_DIM, (lx + 2, ly - 2, 10, 10), 3.14, 6.28, 2)
+
+        note = font_small.render("There is nothing to buy here. There never was.", True, TEXT_DIM)
+        screen.blit(note, (SCREEN_W // 2 - note.get_width() // 2, y0 + 2 * (card_h + gap) + 10))
+        foot = font_tiny.render("Esc: leave", True, TEXT_DIM)
+        screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 24))
+
     # ---------- input ----------
 
     def handle_menu_key(self, key) -> None:
         n = len(MENU_ITEMS)
+        # Easter egg: only the literal Down arrow counts (not the WASD "s"
+        # alias) - any other key breaks the streak.
+        if key == pygame.K_DOWN:
+            self.easter_down_count += 1
+            if self.easter_down_count >= EASTER_MASH_THRESHOLD:
+                self.easter_down_count = 0
+                self.easter_stage = 0
+                self.state = STATE_EASTER_WARNING
+                return
+        else:
+            self.easter_down_count = 0
+
         if key in (pygame.K_UP, pygame.K_w):
             self.menu_index = (self.menu_index - 1) % n
             self.sounds.play(self.sounds.menu_move)
@@ -2427,6 +2507,27 @@ class Game:
                 self.state = STATE_MENU
         elif key == pygame.K_ESCAPE:
             self.state = STATE_MENU
+
+    def handle_easter_warning_key(self, key) -> None:
+        if key == pygame.K_DOWN:
+            self.easter_stage += 1
+            self.sounds.play(self.sounds.menu_select)
+            if self.easter_stage >= len(EASTER_WARNINGS):
+                self.easter_stage = 0
+                self.state = STATE_SECRET_SHOP
+            if self.screen_shake_enabled:
+                self.particles.shake(0.3, 4 + self.easter_stage * 2)
+        else:
+            # Any other key loses your nerve - back to the menu, progress reset.
+            self.easter_stage = 0
+            self.easter_down_count = 0
+            self.state = STATE_MENU
+
+    def handle_secret_shop_key(self, key) -> None:
+        if key == pygame.K_ESCAPE:
+            self.state = STATE_MENU
+        # Every other key is intentionally ignored - there is genuinely
+        # nothing to interact with in here.
 
     def handle_lan_menu_key(self, key) -> None:
         n = len(LAN_MENU_ITEMS)
@@ -2791,6 +2892,10 @@ class Game:
                 self.state = STATE_MENU
         # STATE_UPDATE_CHECK and STATE_UPDATE_DOWNLOAD intentionally take no
         # input - they resolve on their own once the background thread is done.
+        elif self.state == STATE_EASTER_WARNING:
+            self.handle_easter_warning_key(key)
+        elif self.state == STATE_SECRET_SHOP:
+            self.handle_secret_shop_key(key)
 
     # ---------- main loop ----------
 
@@ -2809,6 +2914,8 @@ class Game:
                 self._poll_update_check(dt)
             elif self.state == STATE_UPDATE_DOWNLOAD:
                 self._poll_update_download()
+            elif self.state == STATE_EASTER_WARNING:
+                self.particles.update(dt)
             elif self.state == STATE_LAN_HOST_WAIT:
                 self._lan_host_poll()
             elif self.state == STATE_LAN_CONNECTING:
@@ -2877,6 +2984,10 @@ class Game:
                 self.draw_update_download()
             elif self.state == STATE_UPDATE_ERROR:
                 self.draw_update_error()
+            elif self.state == STATE_EASTER_WARNING:
+                self.draw_easter_warning()
+            elif self.state == STATE_SECRET_SHOP:
+                self.draw_secret_shop()
 
             pygame.display.flip()
 

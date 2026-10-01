@@ -316,11 +316,52 @@ TRAIL_NAMES = list(TRAIL_EFFECTS.keys())
 
 SAVE_DIR_NAME = ".megasnake"
 
-GAME_VERSION = "1.7.0"
+# Easter egg: mash Down on the main menu. EASTER_MASH_THRESHOLD consecutive
+# presses (any other key resets the count) triggers the first warning; from
+# there, pressing Down again on each warning screen escalates to the next
+# one, and pressing it through all three opens the (purely cosmetic) secret
+# shop. Any other key on a warning screen bails out and resets everything.
+EASTER_MASH_THRESHOLD = 10
+
+EASTER_WARNINGS = [
+    {
+        "title": "...",
+        "lines": ["What are you doing?", "Get out. You're not supposed to be here."],
+        "color": (235, 235, 245),
+        "shake": 0,
+    },
+    {
+        "title": "I SAID GO BACK",
+        "lines": ["Seriously. Stop pressing down.", "This is your only other warning."],
+        "color": (255, 170, 60),
+        "shake": 3,
+    },
+    {
+        "title": "LAST WARNING",
+        "lines": ["This is it. Turn back now.", "You will not be warned again."],
+        "color": (255, 70, 70),
+        "shake": 6,
+    },
+]
+
+SECRET_SHOP_ITEMS = [
+    ("The Void", "???", "A skin made of pure nothing."),
+    ("Developer's Coffee", "1,000,000 coins", "+0% to everything. Tastes bitter."),
+    ("Fourth Wall", "NOT FOR SALE", "Already broken, see above."),
+    ("Your Sanity", "Already spent", "Refunds not available."),
+    ("Achievement: Curious", "Locked forever", "You'll never actually unlock this."),
+    ("A Second Snake", "Priceless", "It's just staring at you."),
+]
+
+GAME_VERSION = "1.8.0"
 
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.8.0", [
+        "Minor polish and bugfixes.",
+        "(No, that's not the whole changelog. Figure it out.)",
+    ]),
     ("1.7.0", [
         "Auto-updater: checks GitHub Releases on launch, offers to download",
         "and install new versions automatically (with your confirmation)",
