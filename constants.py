@@ -206,13 +206,98 @@ def _pillars_map() -> set:
     return pts
 
 
-LAN_MAPS = {
+def _volcano_map() -> set:
+    # A crater ring tucked in the upper-right, plus scattered lava rock.
+    pts = set()
+    ring_offsets = [(-3, 0), (-2, -2), (0, -3), (2, -2), (3, 0), (2, 2), (0, 3), (-2, 2)]
+    cx, cy = 24, 5
+    for dx, dy in ring_offsets:
+        pts.add((cx + dx, cy + dy))
+    for x, y in [(22, 9), (26, 9), (20, 14), (28, 14), (24, 17)]:
+        pts.add((x, y))
+    return pts
+
+
+def _everest_map() -> set:
+    # A jagged mountain ridge silhouette across the lower-middle of the board.
+    pts = set()
+    for x in range(4, 28):
+        offset = abs(((x - 4) % 10) - 5)  # zigzags 0..5
+        y = 18 - offset
+        pts.add((x, y))
+        if offset >= 4:
+            pts.add((x, y - 1))
+    return pts
+
+
+def _desert_map() -> set:
+    # Sparse, asymmetric dunes.
+    pts = set()
+    for cx, cy in [(6, 16), (26, 16), (6, 6), (26, 6), (16, 19), (16, 3)]:
+        for dx in (-1, 0, 1):
+            pts.add((cx + dx, cy))
+    return pts
+
+
+def _glacier_map() -> set:
+    # Loose grid of 2x2 ice blocks, center kept clear.
+    pts = set()
+    for bx in (5, 13, 21, 27):
+        for by in (3, 10, 17):
+            if (bx, by) == (13, 10):
+                continue
+            for ddx in (0, 1):
+                for ddy in (0, 1):
+                    x, y = bx + ddx, by + ddy
+                    if x < GRID_W and y < GRID_H:
+                        pts.add((x, y))
+    return pts
+
+
+# Shared by local Coop and LAN alike - both are the "2 human players" case.
+MAPS = {
     "Open": set(),
     "Pillars": _pillars_map(),
     "Cross": _cross_map(),
     "Arena": _arena_map(),
+    "Volcano": _volcano_map(),
+    "Everest": _everest_map(),
+    "Desert": _desert_map(),
+    "Glacier": _glacier_map(),
 }
-LAN_MAP_NAMES = list(LAN_MAPS.keys())
+MAP_NAMES = list(MAPS.keys())
+
+# Per-map visual theme: obstacle color + shape, a background tint, a glow
+# accent, and an ambient particle effect. Maps not listed (Open/Pillars/
+# Cross/Arena, and every single-player mode's procedural obstacles) fall
+# back to DEFAULT_THEME - plain gray blocks, no tint, no ambience.
+DEFAULT_OBSTACLE_COLOR = (70, 70, 80)
+DEFAULT_THEME = {
+    "obstacle_color": DEFAULT_OBSTACLE_COLOR,
+    "glow_color": None,
+    "bg_tint": None,
+    "shape": "block",
+    "ambient": None,
+}
+
+MAP_THEMES = {
+    "Volcano": {
+        "obstacle_color": (90, 35, 20), "glow_color": (255, 110, 30),
+        "bg_tint": (28, 12, 10), "shape": "rock", "ambient": "embers",
+    },
+    "Everest": {
+        "obstacle_color": (205, 215, 230), "glow_color": (255, 255, 255),
+        "bg_tint": (10, 16, 26), "shape": "peak", "ambient": "snow",
+    },
+    "Desert": {
+        "obstacle_color": (190, 150, 90), "glow_color": (255, 220, 150),
+        "bg_tint": (26, 20, 10), "shape": "dune", "ambient": "sand",
+    },
+    "Glacier": {
+        "obstacle_color": (150, 205, 235), "glow_color": (215, 240, 255),
+        "bg_tint": (8, 20, 30), "shape": "crystal", "ambient": "sparkle",
+    },
+}
 
 DIFFICULTIES = ["Easy", "Normal", "Hard"]
 DIFFICULTY_SPEED_MULT = {"Easy": 0.85, "Normal": 1.0, "Hard": 1.25}
@@ -231,11 +316,15 @@ TRAIL_NAMES = list(TRAIL_EFFECTS.keys())
 
 SAVE_DIR_NAME = ".megasnake"
 
-GAME_VERSION = "1.5.0"
+GAME_VERSION = "1.6.0"
 
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.6.0", [
+        "Maps now work in local Coop too, not just LAN - pick one before you start",
+        "4 new themed maps: Volcano, Everest, Desert, Glacier (each with tinted obstacles)",
+    ]),
     ("1.5.0", [
         "LAN hosts now pick a ruleset (Classic/Walls/Maze) and a map before starting",
         "4 maps: Open, Pillars, Cross, Arena",

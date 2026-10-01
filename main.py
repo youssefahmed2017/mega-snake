@@ -30,7 +30,7 @@ from constants import (
     POWERUP_FREEZE, POWERUP_TELEPORT, POWERUP_REVIVE, POWERUP_COLORS, POWERUP_DURATIONS, CURSE_DURATION,
     PORTAL_A, PORTAL_B, MODES, MODE_CONFIG, MODE_DESC, DIFFICULTIES, DIFFICULTY_SPEED_MULT,
     GAME_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
-    LAN_RULESETS, LAN_RULESET_NAMES, LAN_MAPS, LAN_MAP_NAMES,
+    LAN_RULESETS, LAN_RULESET_NAMES, MAPS, MAP_NAMES, MAP_THEMES, DEFAULT_THEME,
 )
 from snake import PlayerSnake
 from enemy import EnemySnake
@@ -67,6 +67,7 @@ STATE_SHOP = "shop"
 STATE_ENTER_INITIALS = "enter_initials"
 STATE_LAN_MENU = "lan_menu"
 STATE_LAN_SETUP = "lan_setup"
+STATE_COOP_MAP_SELECT = "coop_map_select"
 STATE_LAN_HOST_WAIT = "lan_host_wait"
 STATE_LAN_JOIN_IP = "lan_join_ip"
 STATE_LAN_CONNECTING = "lan_connecting"
@@ -83,6 +84,7 @@ LAN_HOST_PAUSE_ITEMS = ["Resume", "Settings", "End Session"]
 SETTINGS_ITEMS = ["Volume", "Difficulty", "Screen Shake", "Mute", "Color Blind Mode", "Back"]
 LAN_MENU_ITEMS = ["Host Game", "Join Game", "Back"]
 LAN_SETUP_ITEMS = ["Ruleset", "Map", "Start Hosting"]
+COOP_SETUP_ITEMS = ["Map", "Start Game"]
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
 
@@ -146,12 +148,16 @@ class Game:
         self.lan_menu_index = 0
         self.lan_setup_index = 0
         self.lan_ruleset_idx = LAN_RULESET_NAMES.index("Walls")
-        self.lan_map_idx = 0
+        self.coop_map_idx = 0
         self.lan_ruleset_name = LAN_RULESET_NAMES[self.lan_ruleset_idx]
-        self.lan_map_name = LAN_MAP_NAMES[self.lan_map_idx]
+        self.coop_map_name = MAP_NAMES[self.coop_map_idx]
         self.lan_cfg_override: Optional[dict] = None
         self.lan_ip_input = ""
         self.lan_error_msg = ""
+        self.coop_setup_index = 0
+        self.theme = dict(DEFAULT_THEME)
+        self.ambient_particles: List[list] = []  # [x, y, vx, vy, life, max_life, radius]
+        self._ambient_spawn_accum = 0.0
         self.local_ip: Optional[str] = None
 
         self.reset_run()
@@ -262,6 +268,7 @@ class Game:
             "type": "state",
             "mode": self.mode_name(),
             "ruleset": self.lan_ruleset_name,
+            "map": self.coop_map_name,
             "skin_p1": SKIN_NAMES[self.skin_idx],
             "p1_body": [list(c) for c in self.player.body],
             "p1_dir": list(self.player.direction),
@@ -313,6 +320,9 @@ class Game:
         if snap.get("ruleset") in LAN_RULESETS:
             self.lan_ruleset_name = snap["ruleset"]
             self.lan_cfg_override = dict(LAN_RULESETS[self.lan_ruleset_name])
+        if snap.get("map") in MAPS:
+            self.coop_map_name = snap["map"]
+            self.theme = dict(MAP_THEMES.get(self.coop_map_name, DEFAULT_THEME))
 
         if snap.get("game_over"):
             self.game_over_reason = snap.get("game_over_reason") or "Game over."
@@ -380,6 +390,7 @@ class Game:
             self.state = STATE_LAN_ERROR
             return
         self.particles.update(dt)
+        self._update_ambient(dt)
 
     def _lan_host_pause_poll(self) -> None:
         """While the host has the game paused, update_playing() (and its usual
@@ -422,10 +433,13 @@ class Game:
             self.rivals.append(EnemySnake(rx, ry))
 
         self.obstacles: set = set()
-        if self.lan_cfg_override:
-            heads = [(cx, cy)] + ([(cx - 6, cy)] if cfg["coop"] else [])
+        self.theme = dict(MAP_THEMES.get(self.coop_map_name, DEFAULT_THEME)) if cfg["coop"] else dict(DEFAULT_THEME)
+        self.ambient_particles = []
+        self._ambient_spawn_accum = 0.0
+        if cfg["coop"]:
+            heads = [(cx, cy), (cx - 6, cy)]
             self.obstacles |= {
-                cell for cell in LAN_MAPS.get(self.lan_map_name, set())
+                cell for cell in MAPS.get(self.coop_map_name, set())
                 if all(abs(cell[0] - hx) + abs(cell[1] - hy) >= 4 for hx, hy in heads)
             }
         self.foods: List[Food] = []
@@ -678,6 +692,7 @@ class Game:
             a[2] -= dt
         self.announcer_queue = [a for a in self.announcer_queue if a[2] > 0]
         self.particles.update(dt)
+        self._update_ambient(dt)
 
         if self.lan_role == "host" and self.lan_link and self.lan_link.connected:
             self.lan_link.send(self._build_snapshot())
@@ -1188,10 +1203,87 @@ class Game:
             board.blit(shadow, (x + 3, y + 3))
             board.blit(label, (x, y))
 
+    def _draw_obstacle(self, board: pygame.Surface, gx: int, gy: int) -> None:
+        shape = self.theme.get("shape", "block")
+        color = self.theme.get("obstacle_color", DEFAULT_THEME["obstacle_color"])
+        glow = self.theme.get("glow_color")
+        cx, cy, size = gx * CELL_SIZE, gy * CELL_SIZE, CELL_SIZE
+
+        if shape == "rock":
+            r = pygame.Rect(cx + 2, cy + 2, size - 4, size - 4)
+            pygame.draw.rect(board, color, r, border_radius=2)
+            if glow:
+                t = pygame.time.get_ticks() / 400.0
+                pulse = 0.5 + 0.5 * abs(((t + gx * 0.3 + gy * 0.7) % 2) - 1)
+                crack = tuple(int(glow[i] * pulse + color[i] * (1 - pulse)) for i in range(3))
+                pygame.draw.line(board, crack, (cx + 5, cy + size - 5), (cx + size - 5, cy + 5), 2)
+        elif shape == "peak":
+            pygame.draw.polygon(board, color, [
+                (cx + size // 2, cy + 2), (cx + 2, cy + size - 2), (cx + size - 2, cy + size - 2),
+            ])
+            if glow:
+                pygame.draw.polygon(board, glow, [
+                    (cx + size // 2, cy + 2), (cx + size // 2 - 4, cy + size // 2), (cx + size // 2 + 4, cy + size // 2),
+                ])
+        elif shape == "dune":
+            r = pygame.Rect(cx + 1, cy + size // 3, size - 2, size - size // 3 - 1)
+            pygame.draw.ellipse(board, color, r)
+        elif shape == "crystal":
+            pts = [(cx + size // 2, cy + 1), (cx + size - 2, cy + size // 2),
+                   (cx + size // 2, cy + size - 2), (cx + 2, cy + size // 2)]
+            pygame.draw.polygon(board, color, pts)
+            if glow:
+                pygame.draw.polygon(board, glow, pts, width=1)
+        else:
+            r = pygame.Rect(cx + 2, cy + 2, size - 4, size - 4)
+            pygame.draw.rect(board, color, r, border_radius=4)
+
+    def _spawn_ambient(self, kind: str) -> None:
+        board_w, board_h = GRID_W * CELL_SIZE, GRID_H * CELL_SIZE
+        glow = self.theme.get("glow_color") or (255, 255, 255)
+        if kind == "embers":
+            p = [random.uniform(board_w * 0.55, board_w * 0.95), board_h * 0.15,
+                 random.uniform(-6, 6), random.uniform(-35, -18)]
+        elif kind == "snow":
+            p = [random.uniform(0, board_w), -5, random.uniform(-8, 8), random.uniform(14, 26)]
+        elif kind == "sand":
+            p = [-5, random.uniform(0, board_h), random.uniform(18, 34), random.uniform(-3, 3)]
+        else:  # sparkle
+            p = [random.uniform(0, board_w), random.uniform(0, board_h), 0.0, 0.0]
+        life = random.uniform(0.5, 1.0) if kind == "sparkle" else random.uniform(1.5, 5.0)
+        self.ambient_particles.append(p + [life, life, random.uniform(1.2, 2.6), glow])
+
+    def _update_ambient(self, dt: float) -> None:
+        kind = self.theme.get("ambient")
+        if kind:
+            self._ambient_spawn_accum += dt
+            while self._ambient_spawn_accum >= 0.12:
+                self._ambient_spawn_accum -= 0.12
+                self._spawn_ambient(kind)
+
+        board_h = GRID_H * CELL_SIZE
+        alive = []
+        for p in self.ambient_particles:
+            p[0] += p[2] * dt
+            p[1] += p[3] * dt
+            p[4] -= dt
+            if p[4] > 0 and -20 <= p[1] <= board_h + 20:
+                alive.append(p)
+        self.ambient_particles = alive
+
+    def _draw_ambient(self, board: pygame.Surface) -> None:
+        for (x, y, vx, vy, life, max_life, radius, color) in self.ambient_particles:
+            t = max(0.0, min(1.0, life / max_life))
+            alpha = int(200 * t)
+            r = max(1, int(radius))
+            s = pygame.Surface((r * 2 + 2, r * 2 + 2), pygame.SRCALPHA)
+            pygame.draw.circle(s, (*color, alpha), (r + 1, r + 1), r)
+            board.blit(s, (x - r, y - r), special_flags=pygame.BLEND_RGBA_ADD)
+
     def draw_playing(self, alpha: float) -> None:
         ox, oy = self.particles.get_shake_offset() if self.screen_shake_enabled else (0, 0)
         board = pygame.Surface((GRID_W * CELL_SIZE, GRID_H * CELL_SIZE))
-        board.fill(BG)
+        board.fill(self.theme.get("bg_tint") or BG)
 
         combo_t = min(1.0, self.combo / 20)
         line_color = tuple(int(GRID_LINE[i] + (ACCENT[i] - GRID_LINE[i]) * combo_t * 0.4) for i in range(3))
@@ -1201,8 +1293,9 @@ class Game:
             pygame.draw.line(board, line_color, (0, gy * CELL_SIZE), (GRID_W * CELL_SIZE, gy * CELL_SIZE))
 
         for (ox2, oy2) in self.obstacles:
-            r = pygame.Rect(ox2 * CELL_SIZE + 2, oy2 * CELL_SIZE + 2, CELL_SIZE - 4, CELL_SIZE - 4)
-            pygame.draw.rect(board, (70, 70, 80), r, border_radius=4)
+            self._draw_obstacle(board, ox2, oy2)
+
+        self._draw_ambient(board)
 
         if self.portal_pair:
             t = pygame.time.get_ticks() / 300.0
@@ -1698,7 +1791,7 @@ class Game:
         share_r = font_small.render("Share this with the other player on your network.", True, TEXT_DIM)
         screen.blit(share_r, (SCREEN_W // 2 - share_r.get_width() // 2, 210))
 
-        setup_r = font_small.render(f"Ruleset: {self.lan_ruleset_name}   Map: {self.lan_map_name}", True, TEXT)
+        setup_r = font_small.render(f"Ruleset: {self.lan_ruleset_name}   Map: {self.coop_map_name}", True, TEXT)
         screen.blit(setup_r, (SCREEN_W // 2 - setup_r.get_width() // 2, 240))
 
         dots = "." * (1 + int(pygame.time.get_ticks() / 400) % 3)
@@ -1713,11 +1806,11 @@ class Game:
         t = font_big.render("MATCH SETUP", True, ACCENT)
         screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 60))
 
-        # Live selection, not the "committed" self.lan_ruleset_name/lan_map_name
+        # Live selection, not the "committed" self.lan_ruleset_name/coop_map_name
         # (those only update when Start Hosting is actually pressed) - this
         # screen must reflect whatever's currently highlighted as you browse.
         live_ruleset = LAN_RULESET_NAMES[self.lan_ruleset_idx]
-        live_map = LAN_MAP_NAMES[self.lan_map_idx]
+        live_map = MAP_NAMES[self.coop_map_idx]
 
         values = [
             f"< {live_ruleset} >",
@@ -1740,26 +1833,59 @@ class Game:
         desc_r = font_small.render(desc, True, TEXT_DIM)
         screen.blit(desc_r, (SCREEN_W // 2 - desc_r.get_width() // 2, y + 10))
 
-        obstacle_count = len(LAN_MAPS[live_map])
+        self._draw_map_preview(live_map, y + 34)
+
+        foot = font_tiny.render("Up/Down select   Left/Right change   Enter confirm   Esc back", True, TEXT_DIM)
+        screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 20))
+
+    def _draw_map_preview(self, map_name: str, y: int) -> None:
+        """Shared by the LAN Match Setup and local Coop map-select screens:
+        obstacle count line + a tiny themed preview of the layout."""
+        theme = MAP_THEMES.get(map_name, DEFAULT_THEME)
+        obstacle_count = len(MAPS[map_name])
         map_r = font_small.render(
             f"{obstacle_count} obstacle{'s' if obstacle_count != 1 else ''} on this map" if obstacle_count else "No obstacles on this map",
             True, TEXT_DIM,
         )
-        screen.blit(map_r, (SCREEN_W // 2 - map_r.get_width() // 2, y + 34))
+        screen.blit(map_r, (SCREEN_W // 2 - map_r.get_width() // 2, y))
 
-        # Tiny obstacle-layout preview
         preview_w, preview_h = 220, 150
         px0 = SCREEN_W // 2 - preview_w // 2
-        py0 = y + 66
-        pygame.draw.rect(screen, (24, 26, 36), (px0, py0, preview_w, preview_h), border_radius=6)
+        py0 = y + 32
+        bg = theme.get("bg_tint") or (24, 26, 36)
+        pygame.draw.rect(screen, bg, (px0, py0, preview_w, preview_h), border_radius=6)
         pygame.draw.rect(screen, (48, 52, 66), (px0, py0, preview_w, preview_h), width=1, border_radius=6)
         sx, sy = preview_w / GRID_W, preview_h / GRID_H
-        for (ox, oy) in LAN_MAPS[live_map]:
-            pygame.draw.rect(screen, (90, 94, 110), (px0 + ox * sx, py0 + oy * sy, max(2, sx), max(2, sy)))
+        obstacle_color = theme.get("obstacle_color", DEFAULT_THEME["obstacle_color"])
+        for (ox, oy) in MAPS[map_name]:
+            pygame.draw.rect(screen, obstacle_color, (px0 + ox * sx, py0 + oy * sy, max(2, sx), max(2, sy)))
         for hx in (GRID_W // 2, GRID_W // 2 - 6):
             pygame.draw.circle(screen, GREEN, (int(px0 + hx * sx), int(py0 + GRID_H // 2 * sy)), 3)
 
-        foot = font_tiny.render("Up/Down select   Left/Right change   Enter confirm   Esc back", True, TEXT_DIM)
+    def draw_coop_map_select(self) -> None:
+        screen.fill(BG)
+        t = font_big.render("CHOOSE A MAP", True, ACCENT)
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 50))
+        sub = font_small.render("Local 2-player - arrows move P1, WASD moves P2", True, TEXT_DIM)
+        screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 96))
+
+        live_map = MAP_NAMES[self.coop_map_idx]
+        items = [f"< {live_map} >", ""]
+        y = 150
+        for i, label in enumerate(COOP_SETUP_ITEMS):
+            selected = i == self.coop_setup_index
+            color = ACCENT if selected else TEXT
+            prefix = "> " if selected else "  "
+            line = f"{prefix}{label}"
+            if items[i]:
+                line += "  " + items[i]
+            text = font_mid.render(line, True, color)
+            screen.blit(text, (SCREEN_W // 2 - 160, y))
+            y += 44
+
+        self._draw_map_preview(live_map, y + 10)
+
+        foot = font_tiny.render("Up/Down select   Left/Right change map   Enter confirm   Esc back", True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 20))
 
     def draw_lan_join_ip(self) -> None:
@@ -2062,8 +2188,12 @@ class Game:
             self.sounds.play(self.sounds.menu_select)
             choice = MENU_ITEMS[self.menu_index]
             if choice == "Start Game":
-                self.reset_run()
-                self.state = STATE_PLAYING
+                if self.mode_name() == "Coop":
+                    self.coop_setup_index = 0
+                    self.state = STATE_COOP_MAP_SELECT
+                else:
+                    self.reset_run()
+                    self.state = STATE_PLAYING
             elif choice == "LAN Multiplayer":
                 if self.local_ip is None:
                     self.local_ip = network.get_local_ip()
@@ -2129,14 +2259,14 @@ class Game:
                 self.lan_ruleset_idx = (self.lan_ruleset_idx + direction) % len(LAN_RULESET_NAMES)
                 self.sounds.play(self.sounds.menu_move)
             elif choice == "Map":
-                self.lan_map_idx = (self.lan_map_idx + direction) % len(LAN_MAP_NAMES)
+                self.coop_map_idx = (self.coop_map_idx + direction) % len(MAP_NAMES)
                 self.sounds.play(self.sounds.menu_move)
         elif key == pygame.K_RETURN:
             choice = LAN_SETUP_ITEMS[self.lan_setup_index]
             if choice == "Start Hosting":
                 self.sounds.play(self.sounds.menu_select)
                 self.lan_ruleset_name = LAN_RULESET_NAMES[self.lan_ruleset_idx]
-                self.lan_map_name = LAN_MAP_NAMES[self.lan_map_idx]
+                self.coop_map_name = MAP_NAMES[self.coop_map_idx]
                 self.lan_cfg_override = dict(LAN_RULESETS[self.lan_ruleset_name])
                 try:
                     self.lan_host = network.Host()
@@ -2147,6 +2277,28 @@ class Game:
                     self.state = STATE_LAN_ERROR
         elif key == pygame.K_ESCAPE:
             self.state = STATE_LAN_MENU
+
+    def handle_coop_map_select_key(self, key) -> None:
+        n = len(COOP_SETUP_ITEMS)
+        if key in (pygame.K_UP, pygame.K_w):
+            self.coop_setup_index = (self.coop_setup_index - 1) % n
+            self.sounds.play(self.sounds.menu_move)
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            self.coop_setup_index = (self.coop_setup_index + 1) % n
+            self.sounds.play(self.sounds.menu_move)
+        elif key in (pygame.K_LEFT, pygame.K_a, pygame.K_RIGHT, pygame.K_d):
+            if COOP_SETUP_ITEMS[self.coop_setup_index] == "Map":
+                direction = -1 if key in (pygame.K_LEFT, pygame.K_a) else 1
+                self.coop_map_idx = (self.coop_map_idx + direction) % len(MAP_NAMES)
+                self.sounds.play(self.sounds.menu_move)
+        elif key == pygame.K_RETURN:
+            if COOP_SETUP_ITEMS[self.coop_setup_index] == "Start Game":
+                self.sounds.play(self.sounds.menu_select)
+                self.coop_map_name = MAP_NAMES[self.coop_map_idx]
+                self.reset_run()
+                self.state = STATE_PLAYING
+        elif key == pygame.K_ESCAPE:
+            self.state = STATE_MENU
 
     def handle_lan_join_ip_key(self, key) -> None:
         if key == pygame.K_RETURN:
@@ -2403,6 +2555,8 @@ class Game:
             self.handle_lan_menu_key(key)
         elif self.state == STATE_LAN_SETUP:
             self.handle_lan_setup_key(key)
+        elif self.state == STATE_COOP_MAP_SELECT:
+            self.handle_coop_map_select_key(key)
         elif self.state == STATE_LAN_HOST_WAIT:
             if key == pygame.K_ESCAPE:
                 if self.lan_host:
@@ -2482,6 +2636,8 @@ class Game:
                 self.draw_lan_menu()
             elif self.state == STATE_LAN_SETUP:
                 self.draw_lan_setup()
+            elif self.state == STATE_COOP_MAP_SELECT:
+                self.draw_coop_map_select()
             elif self.state == STATE_LAN_HOST_WAIT:
                 self.draw_lan_host_wait()
             elif self.state == STATE_LAN_JOIN_IP:
