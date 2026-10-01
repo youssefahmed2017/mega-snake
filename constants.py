@@ -353,11 +353,15 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.8.0"
+GAME_VERSION = "1.8.1"
 
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.8.1", [
+        "Fixed the auto-updater on Windows: the updated game now actually relaunches",
+        "(it used to fail with 'Failed to load Python DLL' or hang in the background)",
+    ]),
     ("1.8.0", [
         "Minor polish and bugfixes.",
         "(No, that's not the whole changelog. Figure it out.)",

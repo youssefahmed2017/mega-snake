@@ -159,6 +159,21 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+def _fresh_child_env() -> Dict[str, str]:
+    """Environment for relaunching a *different* PyInstaller build.
+
+    A frozen app's bootloader sets _PYI_* variables (notably
+    _PYI_APPLICATION_HOME_DIR, pointing at its own _MEIxxxx temp dir). A
+    child PyInstaller exe that inherits them assumes it's a sub-process of
+    that same app and loads python3xx.dll from the parent's temp dir - which
+    is deleted the moment the parent exits, giving "Failed to load Python
+    DLL". PYINSTALLER_RESET_ENVIRONMENT=1 tells the child bootloader to start
+    fresh instead."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI_")}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
 def _find_app_bundle(executable_path: Path) -> Optional[Path]:
     for p in [executable_path, *executable_path.parents]:
         if p.suffix == ".app":
@@ -183,13 +198,14 @@ def apply_update_and_relaunch(downloaded_path: Path) -> Optional[str]:
         exe_path = Path(sys.executable).resolve()
         backup = exe_path.with_suffix(".exe.bak")
         bat_path = Path(tempfile.gettempdir()) / "megasnake_update.bat"
+        # No "goto" inside a parenthesized if-block: cmd.exe can get stuck re-reading it.
         bat_path.write_text(f'''@echo off
 :wait
-tasklist /FI "PID eq {pid}" | find "{pid}" >nul
-if not errorlevel 1 (
-  timeout /t 1 /nobreak >nul
-  goto wait
-)
+tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
+if errorlevel 1 goto afterwait
+timeout /t 1 /nobreak >nul
+goto wait
+:afterwait
 if exist "{backup}" del /f /q "{backup}"
 if exist "{exe_path}" move /y "{exe_path}" "{backup}" >nul
 move /y "{downloaded_path}" "{exe_path}" >nul
@@ -198,8 +214,10 @@ del "%~f0"
 ''', encoding="utf-8")
         subprocess.Popen(
             ["cmd.exe", "/c", str(bat_path)],
-            creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+            # Not DETACHED_PROCESS: with no console at all, the tasklist|find wait never exits.
+            creationflags=subprocess.CREATE_NO_WINDOW,
             close_fds=True,
+            env=_fresh_child_env(),
         )
         os._exit(0)
 
@@ -220,7 +238,7 @@ open "{app_path}"
 rm -f "$0"
 ''', encoding="utf-8")
         script_path.chmod(0o755)
-        subprocess.Popen(["/bin/bash", str(script_path)], start_new_session=True)
+        subprocess.Popen(["/bin/bash", str(script_path)], start_new_session=True, env=_fresh_child_env())
         os._exit(0)
 
     else:  # Linux
@@ -235,7 +253,7 @@ chmod +x "{exe_path}"
 rm -f "$0"
 ''', encoding="utf-8")
         script_path.chmod(0o755)
-        subprocess.Popen(["/bin/bash", str(script_path)], start_new_session=True)
+        subprocess.Popen(["/bin/bash", str(script_path)], start_new_session=True, env=_fresh_child_env())
         os._exit(0)
 
     return None  # unreachable except on an unknown platform() value
