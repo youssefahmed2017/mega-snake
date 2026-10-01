@@ -354,7 +354,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.8.6"
+GAME_VERSION = "1.8.7"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker). Empty
 # until it's deployed, which hides online play behind a friendly message.
@@ -365,6 +365,12 @@ ONLINE_SERVER_URL = ""
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.8.7", [
+        "Added in-match chat for LAN and Online multiplayer",
+        "Open it from the Pause screen with T - the match stays paused while",
+        "either of you is typing, so nobody's snake moves mid-sentence",
+        "Supports full Unicode text and most emoji",
+    ]),
     ("1.8.6", [
         "Fixed an endless update loop on macOS when the app was opened from Downloads",
         "If an update ever fails to install, the game now says so instead of retrying forever",

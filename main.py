@@ -57,6 +57,13 @@ font_big = pygame.font.SysFont("consolas", 40, bold=True)
 font_mid = pygame.font.SysFont("consolas", 24, bold=True)
 font_small = pygame.font.SysFont("consolas", 16)
 font_tiny = pygame.font.SysFont("consolas", 13)
+# Consolas has no emoji/CJK/etc. glyphs, so chat uses its own font with far
+# broader Unicode coverage (confirmed on Windows: Latin, accents, many
+# symbols/arrows, and monochrome emoji). It's still a single font, not true
+# per-character fallback, so very rare scripts may still show as boxes.
+font_chat = pygame.font.SysFont(
+    "segoeuiemoji,notocoloremoji,applecoloremoji,notosans,dejavusans,segoeui,arial", 17,
+)
 
 SKIN_NAMES = list(SNAKE_SKINS.keys())
 
@@ -92,6 +99,13 @@ STATE_SECRET_SHOP = "secret_shop"
 # After the run-ending death, the board stays up this long (frozen, with the
 # screen shake and death particles playing) before the Game Over screen.
 DEATH_PAUSE_SECONDS = 0.9
+
+# In-match chat (LAN/online only, available from the Paused screen so
+# nobody's snake is ever moving while someone types - see handle_pause_key).
+CHAT_MAX_LEN = 200
+CHAT_MAX_LOG = 50
+CHAT_VISIBLE = 6
+CHAT_COOLDOWN = 0.35
 # How long each cell of a shop trail lingers behind the tail before fading out.
 TRAIL_LIFE = 0.7
 
@@ -179,6 +193,12 @@ class Game:
         self.lan_online = False
         self.online_code_input = ""
         self.snapshot_accum = 0.0
+
+        self.chat_active = False
+        self.chat_input = ""
+        self.chat_log: List[Tuple[str, str]] = []  # [(who, text)], "You" or "Friend"
+        self.chat_unread = 0
+        self.chat_last_sent = 0.0
         self.map_setup_index = 0
         self.theme = dict(DEFAULT_THEME)
         self.ambient_particles: List[list] = []  # [x, y, vx, vy, life, max_life, radius]
@@ -392,6 +412,12 @@ class Game:
         self.lan_client = None
         self.lan_role = None
         self.lan_cfg_override = None
+        if self.chat_active:
+            pygame.key.stop_text_input()
+        self.chat_active = False
+        self.chat_input = ""
+        self.chat_log = []
+        self.chat_unread = 0
 
     def _online_server_url(self) -> str:
         # MEGASNAKE_SERVER points a dev build at `wrangler dev` (ws://127.0.0.1:8787).
@@ -481,6 +507,66 @@ class Game:
             self.run_streak_bonus = 0
             self.state = STATE_GAME_OVER
 
+    def _open_chat(self) -> None:
+        if not self.lan_role or self.chat_active:
+            return
+        self.chat_active = True
+        self.chat_input = ""
+        self.chat_unread = 0
+        pygame.key.start_text_input()
+
+    def _close_chat(self) -> None:
+        if not self.chat_active:
+            return
+        self.chat_active = False
+        self.chat_input = ""
+        pygame.key.stop_text_input()
+
+    def handle_chat_text(self, text: str) -> None:
+        """pygame.TEXTINPUT gives fully composed Unicode text (proper IME/dead-key
+        support), unlike KEYDOWN which only covers keys pygame has a K_* for."""
+        text = "".join(ch for ch in text if ord(ch) >= 32)
+        if not text:
+            return
+        room = CHAT_MAX_LEN - len(self.chat_input)
+        if room > 0:
+            self.chat_input += text[:room]
+
+    def handle_chat_key(self, key) -> None:
+        if key == pygame.K_RETURN:
+            self._send_chat_message()
+        elif key == pygame.K_ESCAPE:
+            self._close_chat()
+        elif key == pygame.K_BACKSPACE:
+            self.chat_input = self.chat_input[:-1]
+
+    def _send_chat_message(self) -> None:
+        text = self.chat_input.strip()
+        self.chat_input = ""
+        if not text or not self.lan_link:
+            return
+        now = pygame.time.get_ticks() / 1000.0
+        if now - self.chat_last_sent < CHAT_COOLDOWN:
+            return  # a paste or key-repeat flood; drop rather than spam the link
+        self.chat_last_sent = now
+        self.lan_link.send({"type": "chat", "text": text})
+        self._append_chat("You", text)
+        self.sounds.play(self.sounds.chat)
+
+    def _append_chat(self, who: str, text: str) -> None:
+        self.chat_log.append((who, text))
+        if len(self.chat_log) > CHAT_MAX_LOG:
+            self.chat_log = self.chat_log[-CHAT_MAX_LOG:]
+        if who != "You" and not self.chat_active:
+            self.chat_unread += 1
+
+    def _on_chat_message(self, msg: dict) -> None:
+        text = "".join(ch for ch in str(msg.get("text", "")) if ord(ch) >= 32)[:CHAT_MAX_LEN]
+        if not text:
+            return
+        self._append_chat("Friend", text)
+        self.sounds.play(self.sounds.chat)
+
     def _lan_host_poll(self) -> None:
         if not self.lan_host:
             return
@@ -527,6 +613,8 @@ class Game:
             mtype = msg.get("type")
             if mtype == "state":
                 self.apply_snapshot(msg)
+            elif mtype == "chat":
+                self._on_chat_message(msg)
             elif mtype == "host_left":
                 self.lan_error_msg = "Host ended the session."
                 self._lan_teardown()
@@ -552,7 +640,11 @@ class Game:
         if not self.lan_link:
             return
         for msg in self.lan_link.poll():
-            if msg.get("type") == "client_left":
+            mtype = msg.get("type")
+            if mtype == "chat":
+                self._on_chat_message(msg)
+                continue
+            if mtype == "client_left":
                 self.lan_error_msg = "Player left the game."
                 self._lan_teardown()
                 self.state = STATE_LAN_ERROR
@@ -724,6 +816,8 @@ class Game:
                     self._lan_teardown()
                     self.state = STATE_LAN_ERROR
                     return
+                elif mtype == "chat":
+                    self._on_chat_message(msg)
             if not self.lan_link.connected:
                 self.lan_error_msg = "Player disconnected."
                 self._lan_teardown()
@@ -1687,8 +1781,13 @@ class Game:
             y += 6
 
         y = SCREEN_H - 130
+        if self.lan_role:
+            y -= 16
         screen.blit(font_tiny.render("Arrows/WASD move  |  P pause", True, TEXT_DIM), (x, y)); y += 16
         screen.blit(font_tiny.render("M mute  |  Esc menu", True, TEXT_DIM), (x, y)); y += 16
+        if self.lan_role:
+            hint_color = GOLD if self.chat_unread else TEXT_DIM
+            screen.blit(font_tiny.render(f"Pause, then {self._chat_hint()}", True, hint_color), (x, y)); y += 16
         mute_state = "muted" if self.sounds.muted else f"{round(self.sounds.master_volume * 100)}%"
         screen.blit(font_tiny.render(f"Volume: {mute_state}", True, TEXT_DIM), (x, y)); y += 20
 
@@ -1769,6 +1868,11 @@ class Game:
         foot = font_tiny.render("Up/Down select   Left/Right change   Enter confirm", True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
 
+    def _chat_hint(self) -> str:
+        if self.chat_unread:
+            return f"T: chat ({self.chat_unread} new)"
+        return "T: chat"
+
     def draw_paused(self) -> None:
         overlay = pygame.Surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 170))
@@ -1779,8 +1883,10 @@ class Game:
             screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, SCREEN_H // 2 - 60))
             sub = font_small.render("Waiting for the host to resume...", True, TEXT_DIM)
             screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, SCREEN_H // 2 - 10))
-            s = font_tiny.render("Esc: leave game", True, TEXT_DIM)
+            s = font_tiny.render(f"Esc: leave game   {self._chat_hint()}", True, TEXT_DIM)
             screen.blit(s, (SCREEN_W // 2 - s.get_width() // 2, SCREEN_H // 2 + 40))
+            if self.chat_active:
+                self._draw_chat_panel()
             return
 
         t = font_big.render("PAUSED", True, TEXT)
@@ -1798,8 +1904,73 @@ class Game:
             note = font_tiny.render("Your friend also sees PAUSED while you're here.", True, TEXT_DIM)
             screen.blit(note, (SCREEN_W // 2 - note.get_width() // 2, SCREEN_H // 2 - 50 + len(items) * 40 + 6))
 
-        s = font_tiny.render("Up/Down select   Enter confirm   P resume   Esc menu", True, TEXT_DIM)
+        s = font_tiny.render(f"Up/Down select   Enter confirm   P resume   Esc menu   {self._chat_hint()}", True, TEXT_DIM)
         screen.blit(s, (SCREEN_W // 2 - s.get_width() // 2, SCREEN_H // 2 + 130))
+
+        if self.chat_active:
+            self._draw_chat_panel()
+
+    def _safe_render_chat(self, text: str, color) -> pygame.Surface:
+        """font_chat covers emoji/most symbols/many accents as one font, but it's
+        not true per-character fallback, so a handful of scripts may still have
+        no glyph. Never let a weird paste crash the game over it."""
+        try:
+            return font_chat.render(text, True, color)
+        except pygame.error:
+            cleaned = "".join(ch if ch.isascii() else "?" for ch in text)
+            return font_chat.render(cleaned or "?", True, color)
+
+    def _draw_chat_panel(self) -> None:
+        # Narrow enough, still centered like the rest of the pause screen, to
+        # stay inside the play area instead of bleeding under the sidebar.
+        panel_w, panel_h = 480, 260
+        px = SCREEN_W // 2 - panel_w // 2
+        py = SCREEN_H // 2 - panel_h // 2 + 40
+        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        pygame.draw.rect(panel, (16, 17, 24, 235), (0, 0, panel_w, panel_h), border_radius=10)
+        pygame.draw.rect(panel, ACCENT, (0, 0, panel_w, panel_h), width=2, border_radius=10)
+        screen.blit(panel, (px, py))
+
+        label = font_tiny.render("CHAT", True, ACCENT)
+        screen.blit(label, (px + 14, py + 10))
+
+        log_y = py + 34
+        log_h = panel_h - 34 - 44
+        visible = self.chat_log[-CHAT_VISIBLE:]
+        # Bottom-anchored so the newest message always sits just above the input box.
+        y = log_y + log_h - 22
+        for who, text in reversed(visible):
+            color = ACCENT if who == "You" else GOLD
+            prefix = self._safe_render_chat(f"{who}:", color)
+            line = self._safe_render_chat(text, TEXT)
+            avail = panel_w - 14 - prefix.get_width() - 6 - 14
+            if line.get_width() > avail > 0:
+                clipped = pygame.Surface((avail, line.get_height()), pygame.SRCALPHA)
+                clipped.blit(line, (0, 0))
+                line = clipped
+            screen.blit(prefix, (px + 14, y))
+            screen.blit(line, (px + 14 + prefix.get_width() + 6, y))
+            y -= 22
+            if y < log_y:
+                break
+
+        box_y = py + panel_h - 36
+        box = pygame.Rect(px + 12, box_y, panel_w - 24, 28)
+        pygame.draw.rect(screen, (28, 30, 40), box, border_radius=6)
+        pygame.draw.rect(screen, (70, 74, 92), box, width=1, border_radius=6)
+        cursor = "|" if (pygame.time.get_ticks() // 500) % 2 == 0 else ""
+        shown = self.chat_input + cursor
+        inp = self._safe_render_chat(shown or " ", TEXT)
+        # Horizontal scroll: keep the tail visible once typing outgrows the box.
+        avail = box.width - 12
+        if inp.get_width() > avail:
+            clip = pygame.Surface((avail, inp.get_height()), pygame.SRCALPHA)
+            clip.blit(inp, (avail - inp.get_width(), 0))
+            inp = clip
+        screen.blit(inp, (box.x + 6, box.y + box.height // 2 - inp.get_height() // 2))
+
+        foot = font_tiny.render(f"Enter send ({CHAT_MAX_LEN - len(self.chat_input)} left)   Esc close", True, TEXT_DIM)
+        screen.blit(foot, (px + panel_w - foot.get_width() - 14, py + 10))
 
     def draw_game_over(self) -> None:
         screen.fill(BG)
@@ -3006,6 +3177,8 @@ class Game:
         elif key == pygame.K_m:
             self.sounds.muted = not self.sounds.muted
             self.save_settings()
+        # No chat here on purpose - chat only opens from Paused (see
+        # handle_pause_key), so a snake is never moving while someone types.
 
     def handle_settings_key(self, key) -> None:
         n = len(SETTINGS_ITEMS)
@@ -3059,6 +3232,8 @@ class Game:
             elif key == pygame.K_m:
                 self.sounds.muted = not self.sounds.muted
                 self.save_settings()
+            elif key == pygame.K_t:
+                self._open_chat()
             return
 
         items = self._pause_items()
@@ -3096,11 +3271,23 @@ class Game:
         elif key == pygame.K_m:
             self.sounds.muted = not self.sounds.muted
             self.save_settings()
+        elif key == pygame.K_t:
+            self._open_chat()
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.TEXTINPUT:
+            if self.chat_active:
+                self.handle_chat_text(event.text)
+            return
         if event.type != pygame.KEYDOWN:
             return
         key = event.key
+
+        if self.chat_active:
+            # Chat owns all keyboard input while open - it's only reachable from
+            # Paused, so there's no snake to accidentally steer underneath it.
+            self.handle_chat_key(key)
+            return
 
         if self.state == STATE_MENU:
             self.handle_menu_key(key)

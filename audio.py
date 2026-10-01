@@ -66,6 +66,7 @@ class SoundBank:
         self.freeze = _tone(1200, 0.15, 0.2, "sine")
         self.teleport = _sweep(200, 1400, 0.22, 0.3)
         self.unlock = _sweep(500, 1600, 0.4, 0.3)
+        self.chat = _tone(950, 0.05, 0.14, "square")
         self.muted = False
         self.master_volume = 1.0
 
