@@ -42,6 +42,7 @@ class ParticleSystem:
     def __init__(self) -> None:
         self.particles: List[Particle] = []
         self.shake_time = 0.0
+        self.shake_duration = 0.0
         self.shake_mag = 0.0
 
     def burst(self, x: float, y: float, color: Tuple[int, int, int], count: int = 14, speed: float = 140, life: float = 0.5) -> None:
@@ -62,18 +63,24 @@ class ParticleSystem:
 
     def shake(self, duration: float, magnitude: float) -> None:
         self.shake_time = max(self.shake_time, duration)
+        self.shake_duration = max(self.shake_duration, self.shake_time)
         self.shake_mag = max(self.shake_mag, magnitude)
 
     def get_shake_offset(self) -> Tuple[int, int]:
         if self.shake_time <= 0:
             return 0, 0
-        m = self.shake_mag * (self.shake_time)
-        return int(random.uniform(-m, m)), int(random.uniform(-m, m))
+        # Full magnitude (in pixels) at the start, fading linearly to zero.
+        m = self.shake_mag * (self.shake_time / self.shake_duration)
+        return round(random.uniform(-m, m)), round(random.uniform(-m, m))
 
     def update(self, dt: float) -> None:
         self.particles = [p for p in self.particles if p.update(dt)]
         if self.shake_time > 0:
             self.shake_time = max(0.0, self.shake_time - dt)
+            if self.shake_time == 0:
+                # Reset so one big shake doesn't inflate every later small one.
+                self.shake_mag = 0.0
+                self.shake_duration = 0.0
 
     def draw(self, surf: pygame.Surface) -> None:
         for p in self.particles:
