@@ -3,6 +3,7 @@ name: Build cross-platform binaries
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch: {}
 
 jobs:
@@ -60,3 +61,32 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: ${{ matrix.output_path }}
           if-no-files-found: error
+
+  release:
+    # Only on a version tag (v1.6.0, ...) - the updater needs a stable, public,
+    # non-expiring download URL per version. Workflow-run artifacts expire and
+    # require auth to fetch, so they can't serve that role; a GitHub Release's
+    # assets can.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: false
+
+      - name: Flatten and rename release assets
+        run: |
+          mkdir -p out
+          cp release-assets/MegaSnake-Windows/MegaSnake.exe out/MegaSnake-Windows.exe
+          cp release-assets/MegaSnake-macOS/MegaSnake.app.zip out/MegaSnake-macOS.zip
+          cp release-assets/MegaSnake-Linux/MegaSnake out/MegaSnake-Linux
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          generate_release_notes: true
+          make_latest: true

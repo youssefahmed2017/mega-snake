@@ -316,11 +316,18 @@ TRAIL_NAMES = list(TRAIL_EFFECTS.keys())
 
 SAVE_DIR_NAME = ".megasnake"
 
-GAME_VERSION = "1.6.0"
+GAME_VERSION = "1.7.0"
 
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.7.0", [
+        "Auto-updater: checks GitHub Releases on launch, offers to download",
+        "and install new versions automatically (with your confirmation)",
+        "Maps now apply to every mode, not just Coop/LAN (Daily stays seeded-only)",
+        "Fixed food blending into a themed map's palette (every food item now",
+        "has a visible outline, not just bomb/curse)",
+    ]),
     ("1.6.0", [
         "Maps now work in local Coop too, not just LAN - pick one before you start",
         "4 new themed maps: Volcano, Everest, Desert, Glacier (each with tinted obstacles)",

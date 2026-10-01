@@ -14,6 +14,8 @@ from __future__ import annotations
 import datetime
 import random
 import sys
+import tempfile
+from pathlib import Path
 from collections import deque
 from typing import Dict, List, Optional, Tuple
 
@@ -40,6 +42,7 @@ from achievements import ACHIEVEMENTS, AchievementTracker
 from audio import SoundBank
 import persistence
 import network
+import updater
 from quests import quests_for_date
 
 pygame.init()
@@ -74,10 +77,15 @@ STATE_LAN_CONNECTING = "lan_connecting"
 STATE_LAN_ERROR = "lan_error"
 STATE_HOWTO = "howto"
 STATE_QUESTS = "quests"
+STATE_UPDATE_CHECK = "update_check"
+STATE_UPDATE_PROMPT = "update_prompt"
+STATE_UPDATE_NONE = "update_none"
+STATE_UPDATE_DOWNLOAD = "update_download"
+STATE_UPDATE_ERROR = "update_error"
 
 MENU_ITEMS = [
     "Start Game", "Mode", "Skin", "LAN Multiplayer", "Daily Quests", "Shop", "Settings",
-    "How to Play", "Stats", "Leaderboard", "Achievements", "Changelog", "Quit",
+    "How to Play", "Stats", "Leaderboard", "Achievements", "Changelog", "Check for Updates", "Quit",
 ]
 PAUSE_ITEMS = ["Resume", "Restart", "Settings", "Main Menu"]
 LAN_HOST_PAUSE_ITEMS = ["Resume", "Settings", "End Session"]
@@ -160,7 +168,22 @@ class Game:
         self._ambient_spawn_accum = 0.0
         self.local_ip: Optional[str] = None
 
+        # Auto-updater: checks GitHub Releases on a background thread so the
+        # UI never blocks. The startup check is silent on "no update" or a
+        # network error (most launches, most of the time) - only a manual
+        # "Check for Updates" from the menu reports those explicitly.
+        self.update_checker: Optional[updater.UpdateChecker] = None
+        self.update_downloader: Optional[updater.Downloader] = None
+        self.update_releases: List[updater.Release] = []
+        self.update_choice_index = 0  # 0 = Yes, 1 = No
+        self.update_error_msg = ""
+        self.update_check_silent = True
+        self.update_check_anim = 0.0
+        self.prev_state_before_update = STATE_MENU
+
         self.reset_run()
+        self.update_checker = updater.UpdateChecker(GAME_VERSION)
+        self.state = STATE_UPDATE_CHECK
 
     # ---------- helpers ----------
 
@@ -236,6 +259,60 @@ class Game:
             r, g, b = colorsys.hsv_to_rgb(hue, 0.85, 1.0)
             return int(r * 255), int(g * 255), int(b * 255)
         return spec
+
+    # ---------- auto-updater ----------
+
+    def _start_update_check(self, silent: bool) -> None:
+        self.update_check_silent = silent
+        self.update_check_anim = 0.0
+        self.update_error_msg = ""
+        self.update_checker = updater.UpdateChecker(GAME_VERSION)
+        self.state = STATE_UPDATE_CHECK
+
+    def _poll_update_check(self, dt: float) -> None:
+        self.update_check_anim = min(1.0, self.update_check_anim + dt * 1.6)
+        checker = self.update_checker
+        if checker is None or not checker.done:
+            return
+        silent = self.update_check_silent
+        if checker.error:
+            if silent:
+                self.state = STATE_MENU
+            else:
+                self.update_error_msg = checker.error
+                self.state = STATE_UPDATE_ERROR
+        elif checker.updates:
+            self.update_releases = checker.updates
+            self.update_choice_index = 0
+            self.state = STATE_UPDATE_PROMPT
+        else:
+            self.state = STATE_MENU if silent else STATE_UPDATE_NONE
+
+    def _begin_update_download(self) -> None:
+        latest = self.update_releases[-1]
+        asset = latest.asset_for_this_platform()
+        if asset is None:
+            self.update_error_msg = f"No {updater.current_platform()} build in release {latest.tag}."
+            self.state = STATE_UPDATE_ERROR
+            return
+        asset_name = updater.ASSET_BY_PLATFORM[updater.current_platform()]
+        dest = Path(tempfile.gettempdir()) / asset_name
+        self.update_downloader = updater.Downloader(asset["url"], dest)
+        self.state = STATE_UPDATE_DOWNLOAD
+
+    def _poll_update_download(self) -> None:
+        dl = self.update_downloader
+        if dl is None or not dl.done:
+            return
+        if dl.error:
+            self.update_error_msg = dl.error
+            self.state = STATE_UPDATE_ERROR
+            return
+        err = updater.apply_update_and_relaunch(dl.dest_path)
+        # Only reached if the update could NOT be applied (e.g. a dev build) -
+        # on success the process has already exited.
+        self.update_error_msg = err or "Could not apply the update."
+        self.state = STATE_UPDATE_ERROR
 
     # ---------- LAN multiplayer ----------
 
@@ -2185,6 +2262,98 @@ class Game:
         foot = font_small.render("Esc: back", True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
 
+    def _draw_progress_bar(self, frac: float, y: int, label: str) -> None:
+        bar_w, bar_h = 420, 22
+        x = SCREEN_W // 2 - bar_w // 2
+        pygame.draw.rect(screen, (30, 32, 42), (x, y, bar_w, bar_h), border_radius=6)
+        fill_w = int(bar_w * max(0.0, min(1.0, frac)))
+        if fill_w > 0:
+            pygame.draw.rect(screen, ACCENT, (x, y, fill_w, bar_h), border_radius=6)
+        pygame.draw.rect(screen, (60, 64, 80), (x, y, bar_w, bar_h), width=1, border_radius=6)
+        pct = font_small.render(label, True, TEXT)
+        screen.blit(pct, (SCREEN_W // 2 - pct.get_width() // 2, y + bar_h + 10))
+
+    def draw_update_check(self) -> None:
+        screen.fill(BG)
+        t = font_big.render("CHECKING FOR UPDATES", True, ACCENT)
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 180))
+        # Indeterminate-feeling fill: ramps toward ~92% while waiting on the
+        # network call, then snaps to 100% the frame it actually completes.
+        frac = min(0.92, self.update_check_anim) if not (self.update_checker and self.update_checker.done) else 1.0
+        self._draw_progress_bar(frac, 250, f"{int(frac * 100)}% done")
+        sub = font_small.render(f"Current version: v{GAME_VERSION}", True, TEXT_DIM)
+        screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 310))
+
+    def draw_update_prompt(self) -> None:
+        screen.fill(BG)
+        t = font_big.render("UPDATE AVAILABLE", True, GOLD)
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 70))
+
+        sub = font_small.render("New updates:", True, TEXT_DIM)
+        screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 130))
+
+        y = 160
+        last_idx = len(self.update_releases) - 1
+        for i, rel in enumerate(self.update_releases):
+            label = rel.tag if rel.tag.startswith("v") else f"v{rel.tag}"
+            if i == last_idx:
+                label += "  [latest]"
+            color = GOLD if i == last_idx else TEXT
+            line = font_mid.render(label, True, color)
+            screen.blit(line, (SCREEN_W // 2 - line.get_width() // 2, y))
+            y += 32
+
+        q = font_mid.render("Do you want to update?", True, TEXT)
+        screen.blit(q, (SCREEN_W // 2 - q.get_width() // 2, y + 20))
+
+        options = ["YES", "NO"]
+        ox = SCREEN_W // 2 - 90
+        for i, label in enumerate(options):
+            selected = i == self.update_choice_index
+            color = ACCENT if selected else TEXT_DIM
+            box = pygame.Rect(ox + i * 120, y + 64, 90, 40)
+            pygame.draw.rect(screen, (30, 32, 42), box, border_radius=8)
+            pygame.draw.rect(screen, color, box, width=2, border_radius=8)
+            text = font_mid.render(label, True, color)
+            screen.blit(text, (box.centerx - text.get_width() // 2, box.centery - text.get_height() // 2))
+
+        foot = font_tiny.render("Left/Right select   Enter confirm   Esc: skip for now", True, TEXT_DIM)
+        screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
+
+    def draw_update_none(self) -> None:
+        screen.fill(BG)
+        t = font_big.render("UP TO DATE", True, GREEN)
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 200))
+        sub = font_small.render(f"You're on the latest version, v{GAME_VERSION}.", True, TEXT_DIM)
+        screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 260))
+        foot = font_small.render("Enter / Esc: back", True, TEXT_DIM)
+        screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 40))
+
+    def draw_update_download(self) -> None:
+        screen.fill(BG)
+        t = font_big.render("UPDATING", True, ACCENT)
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 180))
+        dl = self.update_downloader
+        frac = dl.progress() if dl else 0.0
+        if dl and dl.total:
+            label = f"{int(frac * 100)}%  ({dl.received // 1024} / {dl.total // 1024} KB)"
+        else:
+            label = "Starting..."
+        self._draw_progress_bar(frac, 250, label)
+        sub = font_small.render("Downloading, then relaunching automatically...", True, TEXT_DIM)
+        screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 310))
+
+    def draw_update_error(self) -> None:
+        screen.fill(BG)
+        t = font_big.render("UPDATE FAILED", True, DANGER)
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 180))
+        msg = font_small.render(str(self.update_error_msg), True, TEXT)
+        screen.blit(msg, (SCREEN_W // 2 - msg.get_width() // 2, 240))
+        hint = font_tiny.render(f"You can always grab it manually from {updater.RELEASES_PAGE}", True, TEXT_DIM)
+        screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, 270))
+        foot = font_small.render("Enter / Esc: back", True, TEXT_DIM)
+        screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 40))
+
     # ---------- input ----------
 
     def handle_menu_key(self, key) -> None:
@@ -2240,9 +2409,24 @@ class Game:
                 self.state = STATE_ACHIEVEMENTS
             elif choice == "Changelog":
                 self.state = STATE_CHANGELOG
+            elif choice == "Check for Updates":
+                self._start_update_check(silent=False)
             elif choice == "Quit":
                 pygame.quit()
                 sys.exit(0)
+
+    def handle_update_prompt_key(self, key) -> None:
+        if key in (pygame.K_LEFT, pygame.K_RIGHT, pygame.K_a, pygame.K_d):
+            self.update_choice_index = 1 - self.update_choice_index
+            self.sounds.play(self.sounds.menu_move)
+        elif key == pygame.K_RETURN:
+            self.sounds.play(self.sounds.menu_select)
+            if self.update_choice_index == 0:
+                self._begin_update_download()
+            else:
+                self.state = STATE_MENU
+        elif key == pygame.K_ESCAPE:
+            self.state = STATE_MENU
 
     def handle_lan_menu_key(self, key) -> None:
         n = len(LAN_MENU_ITEMS)
@@ -2600,6 +2784,13 @@ class Game:
                             STATE_HOWTO, STATE_QUESTS):
             if key == pygame.K_ESCAPE:
                 self.state = STATE_MENU
+        elif self.state == STATE_UPDATE_PROMPT:
+            self.handle_update_prompt_key(key)
+        elif self.state in (STATE_UPDATE_NONE, STATE_UPDATE_ERROR):
+            if key in (pygame.K_RETURN, pygame.K_ESCAPE):
+                self.state = STATE_MENU
+        # STATE_UPDATE_CHECK and STATE_UPDATE_DOWNLOAD intentionally take no
+        # input - they resolve on their own once the background thread is done.
 
     # ---------- main loop ----------
 
@@ -2614,7 +2805,11 @@ class Game:
                     sys.exit(0)
                 self.handle_event(event)
 
-            if self.state == STATE_LAN_HOST_WAIT:
+            if self.state == STATE_UPDATE_CHECK:
+                self._poll_update_check(dt)
+            elif self.state == STATE_UPDATE_DOWNLOAD:
+                self._poll_update_download()
+            elif self.state == STATE_LAN_HOST_WAIT:
                 self._lan_host_poll()
             elif self.state == STATE_LAN_CONNECTING:
                 self._lan_connecting_poll()
@@ -2672,6 +2867,16 @@ class Game:
                 self.draw_howto()
             elif self.state == STATE_QUESTS:
                 self.draw_quests()
+            elif self.state == STATE_UPDATE_CHECK:
+                self.draw_update_check()
+            elif self.state == STATE_UPDATE_PROMPT:
+                self.draw_update_prompt()
+            elif self.state == STATE_UPDATE_NONE:
+                self.draw_update_none()
+            elif self.state == STATE_UPDATE_DOWNLOAD:
+                self.draw_update_download()
+            elif self.state == STATE_UPDATE_ERROR:
+                self.draw_update_error()
 
             pygame.display.flip()
 
