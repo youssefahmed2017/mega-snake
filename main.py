@@ -228,6 +228,10 @@ class Game:
         # wrongly rate-limit a message sent within the first CHAT_COOLDOWN
         # seconds of the game launching.
         self.chat_last_sent = float("-inf")
+        # Client only: T while Playing asks the host to pause (the client has
+        # no pause authority of its own); this remembers to open chat once
+        # that pause actually comes back, instead of needing a second T press.
+        self.chat_pending_open = False
         self.map_setup_index = 0
         self.theme = dict(DEFAULT_THEME)
         self.ambient_particles: List[list] = []  # [x, y, vx, vy, life, max_life, radius]
@@ -447,6 +451,7 @@ class Game:
         self.chat_input = ""
         self.chat_log = []
         self.chat_unread = 0
+        self.chat_pending_open = False
 
     def _online_server_url(self) -> str:
         # MEGASNAKE_SERVER points a dev build at `wrangler dev` (ws://127.0.0.1:8787).
@@ -651,6 +656,9 @@ class Game:
                 return
             elif mtype == "paused":
                 self.state = STATE_PAUSED
+                if self.chat_pending_open:
+                    self.chat_pending_open = False
+                    self._open_chat()
             elif mtype == "resumed":
                 self.state = STATE_PLAYING
         if not self.lan_link.connected:
@@ -847,6 +855,11 @@ class Game:
                     return
                 elif mtype == "chat":
                     self._on_chat_message(msg)
+                elif mtype == "chat_pause_request":
+                    self.pause_index = 0
+                    self.state = STATE_PAUSED
+                    self.lan_link.send({"type": "paused"})
+                    return
             if not self.lan_link.connected:
                 self.lan_error_msg = "Player disconnected."
                 self._lan_teardown()
@@ -1812,11 +1825,11 @@ class Game:
         y = SCREEN_H - 130
         if self.lan_role:
             y -= 16
-        screen.blit(font_tiny.render("Arrows/WASD move  |  P pause", True, TEXT_DIM), (x, y)); y += 16
+        screen.blit(font_tiny.render("Arrows/WASD/hjkl move  |  P pause", True, TEXT_DIM), (x, y)); y += 16
         screen.blit(font_tiny.render("M mute  |  Esc menu", True, TEXT_DIM), (x, y)); y += 16
         if self.lan_role:
             hint_color = GOLD if self.chat_unread else TEXT_DIM
-            screen.blit(font_tiny.render(f"Pause, then {self._chat_hint()}", True, hint_color), (x, y)); y += 16
+            screen.blit(font_tiny.render(self._chat_hint(), True, hint_color), (x, y)); y += 16
         mute_state = "muted" if self.sounds.muted else f"{round(self.sounds.master_volume * 100)}%"
         screen.blit(font_tiny.render(f"Volume: {mute_state}", True, TEXT_DIM), (x, y)); y += 20
 
@@ -2330,7 +2343,7 @@ class Game:
         t = font_big.render("CHOOSE A MAP", True, ACCENT)
         screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 50))
         if MODE_CONFIG[self.mode_name()]["coop"]:
-            sub_text = f"{self.mode_name()} - arrows move P1, WASD moves P2"
+            sub_text = f"{self.mode_name()} - arrows/hjkl move P1, WASD moves P2"
         else:
             sub_text = f"{self.mode_name()} - {MODE_DESC[self.mode_name()]}"
         sub = font_small.render(sub_text, True, TEXT_DIM)
@@ -2582,9 +2595,9 @@ class Game:
         y = 84
         screen.blit(font_small.render("CONTROLS", True, ACCENT), (left_x, y)); y += 24
         for line in [
-            "Arrows / WASD   move",
+            "Arrows / WASD / hjkl   move",
             "P   pause      M   mute      Esc   menu",
-            "Coop: P1 = Arrows, P2 = WASD",
+            "Coop: P1 = Arrows/hjkl, P2 = WASD",
         ]:
             screen.blit(font_tiny.render(line, True, TEXT), (left_x, y)); y += 18
 
@@ -3144,13 +3157,13 @@ class Game:
             return  # the run is over; don't let Esc -> Main Menu skip saving it
         if self.lan_role == "client":
             d = None
-            if key in (pygame.K_UP, pygame.K_w):
+            if key in (pygame.K_UP, pygame.K_w, pygame.K_k):
                 d = (0, -1)
-            elif key in (pygame.K_DOWN, pygame.K_s):
+            elif key in (pygame.K_DOWN, pygame.K_s, pygame.K_j):
                 d = (0, 1)
-            elif key in (pygame.K_LEFT, pygame.K_a):
+            elif key in (pygame.K_LEFT, pygame.K_a, pygame.K_h):
                 d = (-1, 0)
-            elif key in (pygame.K_RIGHT, pygame.K_d):
+            elif key in (pygame.K_RIGHT, pygame.K_d, pygame.K_l):
                 d = (1, 0)
             if d and self.lan_link:
                 self.lan_link.send({"type": "input", "dir": list(d)})
@@ -3162,18 +3175,26 @@ class Game:
             elif key == pygame.K_m:
                 self.sounds.muted = not self.sounds.muted
                 self.save_settings()
+            elif key == pygame.K_t and not self.chat_pending_open and not self.chat_active:
+                # The client can't pause on its own - ask the host to, and
+                # open chat as soon as that pause actually comes back.
+                if self.lan_link:
+                    self.lan_link.send({"type": "chat_pause_request"})
+                self.chat_pending_open = True
             return
 
         cfg = self.mode_cfg()
         is_lan_host = self.lan_role == "host"
         if cfg["coop"]:
-            if key == pygame.K_UP:
+            # hjkl are vim-style alternates for Player 1's arrows (not WASD,
+            # which is already Player 2's local-coop control scheme).
+            if key in (pygame.K_UP, pygame.K_k):
                 self.player.set_direction((0, -1))
-            elif key == pygame.K_DOWN:
+            elif key in (pygame.K_DOWN, pygame.K_j):
                 self.player.set_direction((0, 1))
-            elif key == pygame.K_LEFT:
+            elif key in (pygame.K_LEFT, pygame.K_h):
                 self.player.set_direction((-1, 0))
-            elif key == pygame.K_RIGHT:
+            elif key in (pygame.K_RIGHT, pygame.K_l):
                 self.player.set_direction((1, 0))
             elif not is_lan_host and key == pygame.K_w and self.player2:
                 self.player2.set_direction((0, -1))
@@ -3184,13 +3205,13 @@ class Game:
             elif not is_lan_host and key == pygame.K_d and self.player2:
                 self.player2.set_direction((1, 0))
         else:
-            if key in (pygame.K_UP, pygame.K_w):
+            if key in (pygame.K_UP, pygame.K_w, pygame.K_k):
                 self.player.set_direction((0, -1))
-            elif key in (pygame.K_DOWN, pygame.K_s):
+            elif key in (pygame.K_DOWN, pygame.K_s, pygame.K_j):
                 self.player.set_direction((0, 1))
-            elif key in (pygame.K_LEFT, pygame.K_a):
+            elif key in (pygame.K_LEFT, pygame.K_a, pygame.K_h):
                 self.player.set_direction((-1, 0))
-            elif key in (pygame.K_RIGHT, pygame.K_d):
+            elif key in (pygame.K_RIGHT, pygame.K_d, pygame.K_l):
                 self.player.set_direction((1, 0))
 
         if key == pygame.K_p:
@@ -3206,8 +3227,14 @@ class Game:
         elif key == pygame.K_m:
             self.sounds.muted = not self.sounds.muted
             self.save_settings()
-        # No chat here on purpose - chat only opens from Paused (see
-        # handle_pause_key), so a snake is never moving while someone types.
+        elif key == pygame.K_t and is_lan_host:
+            # Pause (same as P) and open chat in one press, host side - the
+            # host IS the pause authority, so no round trip is needed.
+            self.pause_index = 0
+            self.state = STATE_PAUSED
+            if self.lan_link:
+                self.lan_link.send({"type": "paused"})
+            self._open_chat()
 
     def handle_settings_key(self, key) -> None:
         n = len(SETTINGS_ITEMS)
