@@ -91,6 +91,8 @@ STATE_SECRET_SHOP = "secret_shop"
 # After the run-ending death, the board stays up this long (frozen, with the
 # screen shake and death particles playing) before the Game Over screen.
 DEATH_PAUSE_SECONDS = 0.9
+# How long each cell of a shop trail lingers behind the tail before fading out.
+TRAIL_LIFE = 0.7
 
 MENU_ITEMS = [
     "Start Game", "Mode", "Skin", "Multiplayer", "Daily Quests", "Shop", "Settings",
@@ -269,12 +271,12 @@ class Game:
         self.data["equipped_trail"] = self.equipped_trail
         persistence.save(self.data)
 
-    def trail_color(self, t: float) -> Optional[Tuple[int, int, int]]:
+    def trail_color(self, t: float, offset: float = 0.0) -> Optional[Tuple[int, int, int]]:
         spec = TRAIL_EFFECTS[self.equipped_trail]["color"]
         if spec is None:
             return None
         if spec == "rainbow":
-            hue = (t * 0.3) % 1.0
+            hue = (t * 0.3 + offset) % 1.0
             r, g, b = colorsys.hsv_to_rgb(hue, 0.85, 1.0)
             return int(r * 255), int(g * 255), int(b * 255)
         return spec
@@ -507,6 +509,7 @@ class Game:
             self._lan_teardown()
             self.state = STATE_LAN_ERROR
             return
+        self._update_trail(dt)
         self.particles.update(dt)
         self._update_ambient(dt)
 
@@ -593,6 +596,9 @@ class Game:
 
         self.pending_death_bursts: List[list] = []  # [delay, x, y, color]
         self.death_pause_timer = 0.0
+        self.trail_marks: List[list] = []  # [x, y, life, seq] cells your tail just left
+        self.trail_last_tail: Optional[Tuple[int, int]] = None
+        self.trail_seq = 0
         self.zoom_timer = 0.0
         self.zoom_duration = 0.18
         self.zoom_mag = 0.07
@@ -795,6 +801,7 @@ class Game:
             self.zoom_timer = max(0.0, self.zoom_timer - dt)
 
         self._update_death_bursts(dt)
+        self._update_trail(dt)
 
         self.stats.update(
             combo=self.combo, length=len(self.player.body), score=self.score,
@@ -849,7 +856,52 @@ class Game:
                 self.particles.burst(burst[1], burst[2], burst[3], count=8, speed=180, life=0.6)
                 self.pending_death_bursts.remove(burst)
 
+    def _my_snake(self) -> Tuple[Optional[PlayerSnake], bool]:
+        """The snake this player controls (a LAN/online client steers player 2)."""
+        if self.lan_role == "client":
+            return self.player2, self.player2_alive
+        return self.player, self.player_alive
+
+    def _update_trail(self, dt: float) -> None:
+        for mark in self.trail_marks:
+            mark[2] -= dt
+        self.trail_marks = [m for m in self.trail_marks if m[2] > 0]
+        snake, alive = self._my_snake()
+        if TRAIL_EFFECTS[self.equipped_trail]["color"] is None or not alive or not snake or not snake.body:
+            self.trail_last_tail = None
+            return
+        tail = tuple(snake.body[-1])
+        if self.trail_last_tail is not None and tail != self.trail_last_tail:
+            lx, ly = self.trail_last_tail
+            self.trail_marks.append([lx, ly, TRAIL_LIFE, self.trail_seq])
+            color = self.trail_color(pygame.time.get_ticks() / 1000.0, self.trail_seq * 0.07)
+            px, py = grid_to_px(*self._center((lx, ly)))
+            self.particles.burst(px, py, color, count=2, speed=35, life=0.45)
+            self.trail_seq += 1
+        self.trail_last_tail = tail
+
+    def _draw_trail(self, board: pygame.Surface) -> None:
+        if not self.trail_marks:
+            return
+        t = pygame.time.get_ticks() / 1000.0
+        for x, y, life, seq in self.trail_marks:
+            frac = max(0.0, life / TRAIL_LIFE)
+            color = self.trail_color(t, seq * 0.07)
+            if color is None:
+                return
+            cx, cy = x * CELL_SIZE + CELL_SIZE // 2, y * CELL_SIZE + CELL_SIZE // 2
+            # Soft additive glow, then a shrinking solid core on top.
+            glow_r = int(CELL_SIZE * (0.32 + 0.22 * frac))
+            glow = pygame.Surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+            pygame.draw.circle(glow, (*color, int(60 * frac)), (glow_r, glow_r), glow_r)
+            board.blit(glow, (cx - glow_r, cy - glow_r), special_flags=pygame.BLEND_RGBA_ADD)
+            core = max(2, int(CELL_SIZE * 0.5 * frac))
+            sq = pygame.Surface((core, core), pygame.SRCALPHA)
+            pygame.draw.rect(sq, (*color, int(220 * frac)), (0, 0, core, core), border_radius=max(1, core // 3))
+            board.blit(sq, (cx - core // 2, cy - core // 2))
+
     def _update_death_effects(self, dt: float) -> None:
+        self._update_trail(dt)
         self._update_death_bursts(dt)
         self.particles.update(dt)
         self._update_ambient(dt)
@@ -1497,6 +1549,7 @@ class Game:
                 pygame.draw.rect(board, shade, r, border_radius=6)
 
         self._draw_ghost(board)
+        self._draw_trail(board)
 
         skin = SNAKE_SKINS[SKIN_NAMES[self.skin_idx]]
         ghost_active = POWERUP_GHOST in self.active_powerups
@@ -1868,6 +1921,8 @@ class Game:
         screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 40))
         wallet_r = font_mid.render(f"Wallet: {self.wallet} coins", True, GOLD)
         screen.blit(wallet_r, (SCREEN_W // 2 - wallet_r.get_width() // 2, 90))
+        hint_r = font_tiny.render("Trails leave a glowing streak behind your snake for the whole run.", True, TEXT_DIM)
+        screen.blit(hint_r, (SCREEN_W // 2 - hint_r.get_width() // 2, 124))
 
         items = TRAIL_NAMES + ["Back"]
         y = 150
