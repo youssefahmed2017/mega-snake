@@ -354,7 +354,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.8.10"
+GAME_VERSION = "1.8.11"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker). Empty
 # until it's deployed, which hides online play behind a friendly message.
@@ -365,6 +365,11 @@ ONLINE_SERVER_URL = ""
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.8.11", [
+        "LAN Multiplayer now checks both players are on the same version",
+        "when connecting, and says so clearly instead of silently breaking",
+        "(T-pause-chat and other newer features need BOTH sides updated)",
+    ]),
     ("1.8.10", [
         "Fixed false 'disconnected' errors during a long pause/chat",
         "(the connection stays alive now with a small idle heartbeat)",

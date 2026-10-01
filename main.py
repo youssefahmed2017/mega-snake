@@ -141,6 +141,12 @@ CHAT_COOLDOWN = 0.35
 # keeps real traffic flowing so that never has the chance to happen.
 LAN_HEARTBEAT_SECONDS = 4.0
 
+# How long each side waits for the other to confirm its version before just
+# proceeding anyway (see _lan_host_poll / _lan_connecting_poll). Failing open
+# rather than hanging forever matters for an old peer that predates this
+# handshake entirely and will never send its half of it.
+LAN_HANDSHAKE_TIMEOUT = 3.0
+
 
 def _clean_chat_text(text: str) -> str:
     """Strips control characters and, critically, lone UTF-16 surrogates.
@@ -259,6 +265,14 @@ class Game:
         # that pause actually comes back, instead of needing a second T press.
         self.chat_pending_open = False
         self.lan_heartbeat_last = 0.0
+        # Held between "TCP connected" and "confirmed a compatible version" -
+        # see _lan_host_poll / _lan_connecting_poll. Mismatched LAN versions
+        # used to connect anyway and then behave inexplicably differently on
+        # each side (e.g. one side missing newer features entirely); now it's
+        # caught with a clear message instead.
+        self.lan_pending_link: Optional[network.LineSocket] = None
+        self.lan_handshake_deadline = 0.0
+        self.lan_connect_label = ""
         self.map_setup_index = 0
         self.theme = dict(DEFAULT_THEME)
         self.ambient_particles: List[list] = []  # [x, y, vx, vy, life, max_life, radius]
@@ -467,9 +481,12 @@ class Game:
             self.lan_host.close()
         if self.lan_client:
             self.lan_client.close()
+        if self.lan_pending_link:
+            self.lan_pending_link.close()
         self.lan_link = None
         self.lan_host = None
         self.lan_client = None
+        self.lan_pending_link = None
         self.lan_role = None
         self.lan_cfg_override = None
         if self.chat_active:
@@ -638,6 +655,14 @@ class Game:
         self._append_chat("Friend", text)
         self.sounds.play(self.sounds.chat)
 
+    def _lan_begin_session(self, role: str) -> None:
+        self.lan_link = self.lan_pending_link
+        self.lan_pending_link = None
+        self.lan_role = role
+        self.mode_idx = MODES.index("Coop")
+        self.reset_run()
+        self.state = STATE_PLAYING
+
     def _lan_host_poll(self) -> None:
         if not self.lan_host:
             return
@@ -647,31 +672,99 @@ class Game:
             self._lan_teardown()
             self.state = STATE_LAN_ERROR
             return
-        link = self.lan_host.poll_new_connection()
-        if link:
-            self.lan_link = link
-            self.lan_role = "host"
-            self.mode_idx = MODES.index("Coop")
-            self.reset_run()
-            link.send({"type": "welcome", "mode": self.mode_name(), "skin": SKIN_NAMES[self.skin_idx],
-                       "ruleset": self.lan_ruleset_name})
-            self.state = STATE_PLAYING
+
+        if self.lan_pending_link is None:
+            link = self.lan_host.poll_new_connection()
+            if not link:
+                return
+            self.lan_pending_link = link
+            self.lan_handshake_deadline = pygame.time.get_ticks() / 1000.0 + LAN_HANDSHAKE_TIMEOUT
+
+        link = self.lan_pending_link
+        for msg in link.poll():
+            if msg.get("type") == "hello":
+                their_version = str(msg.get("version") or "")
+                if their_version and their_version != GAME_VERSION:
+                    link.send({"type": "welcome_reject", "host_version": GAME_VERSION})
+                    link.close()
+                    self.lan_pending_link = None
+                    self.lan_error_msg = (
+                        f"A player on v{their_version} tried to join - they need v{GAME_VERSION} too. "
+                        "Make sure you're both on the latest version."
+                    )
+                    self.state = STATE_LAN_ERROR
+                    return
+                link.send({"type": "welcome", "version": GAME_VERSION, "mode": self.mode_name(),
+                           "skin": SKIN_NAMES[self.skin_idx], "ruleset": self.lan_ruleset_name})
+                self._lan_begin_session("host")
+                return
+        if not link.connected:
+            # They vanished mid-handshake. network.Host only ever accepts one
+            # connection for its whole lifetime, so there's no "keep waiting
+            # for someone else" to fall back to here - end this hosting
+            # attempt cleanly instead of silently re-polling a dead link.
+            self.lan_error_msg = "Player disconnected before the connection finished."
+            self._lan_teardown()
+            self.state = STATE_LAN_ERROR
+            return
+        if pygame.time.get_ticks() / 1000.0 >= self.lan_handshake_deadline:
+            # No "hello" in time - most likely a pre-handshake build that will
+            # never send one. Can't version-check it, so just let it through.
+            link.send({"type": "welcome", "version": GAME_VERSION, "mode": self.mode_name(),
+                       "skin": SKIN_NAMES[self.skin_idx], "ruleset": self.lan_ruleset_name})
+            self._lan_begin_session("host")
 
     def _lan_connecting_poll(self) -> None:
-        if not self.lan_client:
+        if not self.lan_client and not self.lan_pending_link:
             return
-        result = self.lan_client.poll_connect_result()
-        if result is True:
-            self.lan_link = self.lan_client.link
-            self.lan_role = "client"
+        if self.lan_pending_link is None:
+            result = self.lan_client.poll_connect_result()
+            if result is None:
+                return
+            if result is False:
+                self.lan_error_msg = self.lan_client.error or "Could not connect."
+                self.lan_client = None
+                self.state = STATE_LAN_ERROR
+                return
+            self.lan_connect_label = self.lan_client.label
+            self.lan_pending_link = self.lan_client.link
             self.lan_client = None
-            self.mode_idx = MODES.index("Coop")
-            self.reset_run()
-            self.state = STATE_PLAYING
-        elif result is False:
-            self.lan_error_msg = self.lan_client.error or "Could not connect."
-            self.lan_client = None
+            self.lan_pending_link.send({"type": "hello", "version": GAME_VERSION})
+            self.lan_handshake_deadline = pygame.time.get_ticks() / 1000.0 + LAN_HANDSHAKE_TIMEOUT
+
+        link = self.lan_pending_link
+        for msg in link.poll():
+            mtype = msg.get("type")
+            if mtype == "welcome_reject":
+                host_version = str(msg.get("host_version") or "?")
+                self.lan_error_msg = (
+                    f"Version mismatch: the host is on v{host_version}, you're on v{GAME_VERSION}. "
+                    "Update to the same version."
+                )
+                self._lan_teardown()
+                self.state = STATE_LAN_ERROR
+                return
+            if mtype == "welcome":
+                host_version = str(msg.get("version") or "")
+                if host_version and host_version != GAME_VERSION:
+                    self.lan_error_msg = (
+                        f"Version mismatch: the host is on v{host_version}, you're on v{GAME_VERSION}. "
+                        "Update to the same version."
+                    )
+                    self._lan_teardown()
+                    self.state = STATE_LAN_ERROR
+                    return
+                self._lan_begin_session("client")
+                return
+        if not link.connected:
+            self.lan_error_msg = "Host disconnected."
+            self._lan_teardown()
             self.state = STATE_LAN_ERROR
+            return
+        if pygame.time.get_ticks() / 1000.0 >= self.lan_handshake_deadline:
+            # No "welcome" in time - a pre-handshake host will never send one
+            # with a version field we can check, so just proceed without it.
+            self._lan_begin_session("client")
 
     def _lan_client_poll(self, dt: float) -> None:
         if not self.lan_link:
@@ -2476,7 +2569,7 @@ class Game:
         screen.fill(BG)
         t = font_big.render("CONNECTING", True, ACCENT)
         screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 140))
-        target = self.lan_client.label if self.lan_client else ""
+        target = self.lan_client.label if self.lan_client else self.lan_connect_label
         dots = "." * (1 + int(pygame.time.get_ticks() / 400) % 3)
         sub = font_mid.render(f"Connecting to {target}{dots}", True, TEXT)
         screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 210))
@@ -3436,7 +3529,10 @@ class Game:
             if key == pygame.K_ESCAPE:
                 if self.lan_client:
                     self.lan_client.close()
+                if self.lan_pending_link:
+                    self.lan_pending_link.close()
                 self.lan_client = None
+                self.lan_pending_link = None
                 self.state = STATE_ONLINE_JOIN_CODE if self.lan_online else STATE_LAN_JOIN_IP
         elif self.state == STATE_LAN_ERROR:
             if key in (pygame.K_RETURN, pygame.K_ESCAPE):
