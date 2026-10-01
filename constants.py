@@ -354,11 +354,14 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.8.2"
+GAME_VERSION = "1.8.3"
 
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.8.3", [
+        "Fixed 'Check for Updates' failing on macOS with an SSL certificate error",
+    ]),
     ("1.8.2", [
         "Fixed a few things you probably haven't found yet.",
         "(One new achievement. Good luck.)",

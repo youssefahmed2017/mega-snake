@@ -26,6 +26,8 @@ import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from tls import ssl_context
+
 REPO = "youssefahmed2017/mega-snake"
 API_RELEASES = f"https://api.github.com/repos/{REPO}/releases"
 RELEASES_PAGE = f"https://github.com/{REPO}/releases"
@@ -72,7 +74,7 @@ def fetch_releases(timeout: float = 4.0) -> List[Release]:
         API_RELEASES,
         headers={"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout, context=ssl_context()) as resp:
         data = json.loads(resp.read().decode("utf-8"))
     releases = []
     for item in data:
@@ -138,7 +140,7 @@ class Downloader:
         tmp = self.dest_path.with_name(self.dest_path.name + ".part")
         try:
             req = urllib.request.Request(self.url, headers={"User-Agent": USER_AGENT})
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with urllib.request.urlopen(req, timeout=20, context=ssl_context()) as resp:
                 self.total = int(resp.headers.get("Content-Length", 0))
                 with open(tmp, "wb") as f:
                     while True:
