@@ -14,6 +14,8 @@ class PlayerSnake:
         self.direction = (1, 0)
         self.pending_direction = (1, 0)
         self.grow_pending = 0
+        self.tail_pop_anim = 999.0  # seconds since the tail last grew; big = no pop animation playing
+        self.turn_anim = 999.0  # seconds since the head last changed direction; big = no squash playing
 
     @property
     def head(self) -> Tuple[int, int]:
@@ -27,7 +29,10 @@ class PlayerSnake:
 
     def step(self, wrap: bool) -> Tuple[int, int]:
         self.prev_body = list(self.body)
+        old_direction = self.direction
         self.direction = self.pending_direction
+        if self.direction != old_direction:
+            self.turn_anim = 0.0
         hx, hy = self.head
         dx, dy = self.direction
         nx, ny = hx + dx, hy + dy
@@ -39,6 +44,7 @@ class PlayerSnake:
         self.body.appendleft((nx, ny))
         if self.grow_pending > 0:
             self.grow_pending -= 1
+            self.tail_pop_anim = 0.0
         else:
             self.body.pop()
 

@@ -368,14 +368,14 @@ EASTER_WARNINGS = [
 
 SECRET_SHOP_ITEMS = [
     ("The Void", "???", "A skin made of pure nothing."),
-    ("Developer's Coffee", "1,000,000 coins", "+0% to everything. Tastes bitter."),
+    ("Developer's Coffee", "1M coins", "+0% to everything. Tastes bitter."),
     ("Fourth Wall", "NOT FOR SALE", "Already broken, see above."),
     ("Your Sanity", "Already spent", "Refunds not available."),
     ("Achievement: Curious", "Locked forever", "You'll never unlock this."),
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.9.4"
+GAME_VERSION = "2.0.0"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker),
 # deployed 2026-10-01 to a free *.workers.dev subdomain. The MEGASNAKE_SERVER
@@ -385,6 +385,19 @@ ONLINE_SERVER_URL = "wss://megasnake-online.megasnake-online.workers.dev"
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("2.0.0", [
+        "A pass on how the game FEELS to play, not just what it can do:",
+        "- Eating pops a floating +10/-5 at the tile, and chained eats climb",
+        "  an ascending scale instead of repeating the same blip",
+        "- Growth: the new tail segment scales in instead of just appearing",
+        "- The snake blinks, flicks its tongue, and squashes/stretches its",
+        "  head on sharp turns - idle personality, not just a moving rect",
+        "- Near misses (survive next to a wall/obstacle/your own tail) now",
+        "  get their own whoosh + screen-edge flash + a tiny hitstop beat,",
+        "  instead of skill only ever being rewarded by not dying",
+        "- Death now eases into a slow-motion beat on the fatal frame instead",
+        "  of just freezing, before cutting to Game Over",
+    ]),
     ("1.9.4", [
         "Removed the outline ring/square drawn behind every food, power-up,",
         "and downerup icon - they looked like a dot in a frame; the icons",

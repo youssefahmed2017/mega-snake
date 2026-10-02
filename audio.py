@@ -52,11 +52,16 @@ class SoundBank:
     def __init__(self) -> None:
         pygame.mixer.set_num_channels(16)
         self.eat = _tone(520, 0.08, 0.25, "square")
+        # Ascending scale for chained eats - each step in a combo plays a
+        # note higher than the last (classic "satisfying chain" trick),
+        # instead of the same flat blip every time. Climbs a bit over an
+        # octave then holds, so a long combo doesn't end up ultrasonic.
+        _combo_semitones = [0, 2, 4, 5, 7, 9, 11, 12, 14, 16, 19, 24]
+        self.combo_scale = [_tone(520 * (2 ** (s / 12)), 0.07, 0.22, "square") for s in _combo_semitones]
         self.golden = _sweep(500, 1100, 0.2, 0.3)
         self.powerup = _sweep(300, 900, 0.25, 0.3)
         self.shrink = _sweep(400, 150, 0.2, 0.25)
         self.bomb = _tone(90, 0.35, 0.35, "saw")
-        self.combo = _tone(880, 0.06, 0.2, "square")
         self.death = _sweep(400, 60, 0.6, 0.35)
         self.achievement = _sweep(600, 1400, 0.35, 0.3)
         self.menu_move = _tone(300, 0.04, 0.15, "square")
@@ -66,9 +71,16 @@ class SoundBank:
         self.freeze = _tone(1200, 0.15, 0.2, "sine")
         self.teleport = _sweep(200, 1400, 0.22, 0.3)
         self.unlock = _sweep(500, 1600, 0.4, 0.3)
+        self.near_miss = _sweep(1200, 700, 0.1, 0.22)
         self.chat = _tone(950, 0.05, 0.14, "square")
         self.muted = False
         self.master_volume = 1.0
+
+    def eat_sound(self, combo: int) -> pygame.mixer.Sound:
+        """The plain blip at combo 1, else the next note up the scale."""
+        if combo <= 1:
+            return self.eat
+        return self.combo_scale[min(combo - 2, len(self.combo_scale) - 1)]
 
     def play(self, sound: pygame.mixer.Sound) -> None:
         if self.muted or self.master_volume <= 0:

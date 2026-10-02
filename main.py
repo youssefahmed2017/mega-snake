@@ -152,6 +152,29 @@ STATE_SECRET_SHOP = "secret_shop"
 # screen shake and death particles playing) before the Game Over screen.
 DEATH_PAUSE_SECONDS = 0.9
 
+# Floating "+10"/"-5" popups at the pickup tile, and the tail's grow-in pop.
+SCORE_POPUP_DURATION = 0.8
+SCORE_POPUP_RISE = 26  # pixels drifted upward over the popup's lifetime
+TAIL_GROW_POP_DURATION = 0.16
+TURN_SQUASH_DURATION = 0.14
+BLINK_PERIOD = 3.2       # how often the head eye blinks
+BLINK_HOLD = 0.12        # how long the blink stays closed
+TONGUE_PERIOD = 4.0      # how often the tongue flicks out
+TONGUE_HOLD = 0.18
+
+# Near misses: head ends up next to something lethal but survives. Rewards
+# skillful close play instead of only ever reacting to actual death.
+NEAR_MISS_COOLDOWN = 1.2      # don't re-trigger while hugging the same wall/tail
+NEAR_MISS_FLASH_DURATION = 0.3
+NEAR_MISS_HITSTOP = 0.1       # real seconds the brief slowdown lasts
+NEAR_MISS_HITSTOP_FACTOR = 0.25  # how slow the game runs during it
+
+# The death pause (board frozen before Game Over) ramps down to near-stopped
+# instead of just holding the last frame - the fatal moment stretches out
+# instead of simply cutting off.
+DEATH_SLOWMO_RAMP = 0.3
+DEATH_SLOWMO_FLOOR = 0.15
+
 # In-match chat (LAN/online only, available from the Paused screen so
 # nobody's snake is ever moving while someone types - see handle_pause_key).
 CHAT_MAX_LEN = 200
@@ -405,6 +428,13 @@ class Game:
         # Keep at most two callouts stacked so a burst of events stays readable.
         self.announcer_queue.append([text, color, life, life])
         del self.announcer_queue[:-2]
+
+    def _spawn_score_popup(self, px: float, py: float, text: str, color: Tuple[int, int, int],
+                            big: bool = False) -> None:
+        """A '+10'/'-5' that drifts up from the pickup and fades, so a score
+        change lands as something you *saw happen* at that exact tile, not
+        just a number that changed in the sidebar a moment later."""
+        self.score_popups.append([px, py, text, color, 0.0, big])
 
     def save_wallet(self) -> None:
         self.data["wallet"] = self.wallet
@@ -1015,6 +1045,11 @@ class Game:
         self.trail_marks: List[list] = []  # [x, y, life, seq] cells your tail just left
         self.trail_last_tail: Optional[Tuple[int, int]] = None
         self.trail_seq = 0
+        self.score_popups: List[list] = []  # [px, py, text, color, age, big]
+        self.near_miss_cooldown = 0.0
+        self.near_miss_flash = 0.0
+        self.hitstop_timer = 0.0
+        self.hitstop_factor = 1.0
         self.zoom_timer = 0.0
         self.zoom_duration = 0.18
         self.zoom_mag = 0.07
@@ -1131,11 +1166,22 @@ class Game:
 
         if self.death_pause_timer > 0:
             self.death_pause_timer -= dt
-            self._update_death_effects(dt)
+            remaining = max(0.0, self.death_pause_timer)
+            frac = min(1.0, (DEATH_PAUSE_SECONDS - remaining) / DEATH_SLOWMO_RAMP)
+            slowmo = 1.0 - (1.0 - DEATH_SLOWMO_FLOOR) * frac
+            self._update_death_effects(dt * slowmo)
             if self.death_pause_timer <= 0:
                 self.death_pause_timer = 0.0
                 self._finalize_game_over()
             return
+
+        if self.hitstop_timer > 0:
+            self.hitstop_timer = max(0.0, self.hitstop_timer - dt)
+            dt *= self.hitstop_factor
+        if self.near_miss_flash > 0:
+            self.near_miss_flash = max(0.0, self.near_miss_flash - dt)
+        if self.near_miss_cooldown > 0:
+            self.near_miss_cooldown = max(0.0, self.near_miss_cooldown - dt)
 
         self.time_alive += dt
         self.stats["time_alive"] = self.time_alive
@@ -1155,6 +1201,15 @@ class Game:
             self.combo_timer -= dt
             if self.combo_timer <= 0:
                 self.combo = 1
+
+        for p in self.score_popups:
+            p[4] += dt
+        self.score_popups = [p for p in self.score_popups if p[4] < SCORE_POPUP_DURATION]
+
+        for snake in self.players:
+            if snake is not None:
+                snake.tail_pop_anim += dt
+                snake.turn_anim += dt
 
         expired = []
         for kind in list(self.active_powerups.keys()):
@@ -1334,6 +1389,29 @@ class Game:
             pygame.draw.rect(sq, (*color, int(220 * frac)), (0, 0, core, core), border_radius=max(1, core // 3))
             board.blit(sq, (cx - core // 2, cy - core // 2))
 
+    def _draw_score_popups(self, board: pygame.Surface) -> None:
+        for px, py, text, color, age, big in self.score_popups:
+            frac = min(1.0, age / SCORE_POPUP_DURATION)
+            font = font_small if big else font_tiny
+            label = font.render(text, True, color)
+            label.set_alpha(int(255 * (1.0 - frac)))
+            y = py - SCORE_POPUP_RISE * frac
+            board.blit(label, (px - label.get_width() // 2, y - label.get_height() // 2))
+
+    def _draw_near_miss_flash(self, board: pygame.Surface) -> None:
+        if self.near_miss_flash <= 0:
+            return
+        frac = self.near_miss_flash / NEAR_MISS_FLASH_DURATION
+        w, h = board.get_size()
+        s = pygame.Surface((w, h), pygame.SRCALPHA)
+        thickness = 14
+        color = (255, 255, 210, int(180 * frac))
+        pygame.draw.rect(s, color, (0, 0, w, thickness))
+        pygame.draw.rect(s, color, (0, h - thickness, w, thickness))
+        pygame.draw.rect(s, color, (0, 0, thickness, h))
+        pygame.draw.rect(s, color, (w - thickness, 0, thickness, h))
+        board.blit(s, (0, 0))
+
     def _update_death_effects(self, dt: float) -> None:
         self._update_trail(dt)
         self._update_death_bursts(dt)
@@ -1437,6 +1515,23 @@ class Game:
                 s |= r.occupies()
         return s
 
+    def _check_near_miss(self, cfg: dict) -> None:
+        """A whoosh + screen flash when the head survives next to something
+        that would have killed it - skill gets its own feedback, not just
+        "you didn't die." Scoped to p1 only; see the hitstop/flash fields."""
+        hx, hy = self.player.head
+        blocked = self._blocking_set("p1")
+        own_tail = set(list(self.player.body)[3:])  # skip head+neck: always adjacent, not a "miss"
+        for nx, ny in ((hx + 1, hy), (hx - 1, hy), (hx, hy + 1), (hx, hy - 1)):
+            off_grid = not cfg["wrap"] and not (0 <= nx < GRID_W and 0 <= ny < GRID_H)
+            if off_grid or (nx, ny) in blocked or (nx, ny) in own_tail:
+                self.near_miss_cooldown = NEAR_MISS_COOLDOWN
+                self.near_miss_flash = NEAR_MISS_FLASH_DURATION
+                self.hitstop_timer = NEAR_MISS_HITSTOP
+                self.hitstop_factor = NEAR_MISS_HITSTOP_FACTOR
+                self.sounds.play(self.sounds.near_miss)
+                return
+
     def _tick(self) -> None:
         cfg = self.mode_cfg()
         ghost = POWERUP_GHOST in self.active_powerups
@@ -1473,6 +1568,9 @@ class Game:
         for tag, snake in movers:
             if self._snake_alive(tag):
                 self._check_portal(tag, snake)
+
+        if self.player_alive and self.near_miss_cooldown <= 0:
+            self._check_near_miss(cfg)
 
         for tag, snake in movers:
             if self._snake_alive(tag):
@@ -1583,8 +1681,9 @@ class Game:
             self.score_breakdown["normal"] += base
             self.score_breakdown["mult_bonus"] += gained - base
             self.stats["food_eaten"] += 1
-            self.sounds.play(self.sounds.combo if self.combo > 1 else self.sounds.eat)
+            self.sounds.play(self.sounds.eat_sound(self.combo))
             self.particles.burst(px, py, self.food_color(FOOD_NORMAL), count=10)
+            self._spawn_score_popup(px, py, f"+{gained}", self.food_color(FOOD_NORMAL))
 
         elif f.kind == FOOD_GOLDEN:
             snake.grow(1)
@@ -1598,6 +1697,7 @@ class Game:
             self.stats["golden_eaten"] += 1
             self.sounds.play(self.sounds.golden)
             self.particles.burst(px, py, self.food_color(FOOD_GOLDEN), count=24, speed=200)
+            self._spawn_score_popup(px, py, f"+{gained}", self.food_color(FOOD_GOLDEN), big=True)
             if self.combo >= 3:
                 self.zoom_timer = self.zoom_duration
                 self._announce("GOLDEN RUSH!", GOLD, life=1.0)
@@ -1612,6 +1712,7 @@ class Game:
             self.stats["food_eaten"] += 1
             self.sounds.play(self.sounds.eat)
             self.particles.burst(px, py, self.food_color(FOOD_SPEED), count=14)
+            self._spawn_score_popup(px, py, f"+{gained}", self.food_color(FOOD_SPEED))
 
         elif f.kind == FOOD_SHRINK:
             snake.shrink(2)
@@ -1619,6 +1720,7 @@ class Game:
             self.score_breakdown["penalty"] -= 5
             self.sounds.play(self.sounds.shrink)
             self.particles.burst(px, py, self.food_color(FOOD_SHRINK), count=12)
+            self._spawn_score_popup(px, py, "-5", DANGER)
 
         self._spawn_food()
 
@@ -1636,6 +1738,7 @@ class Game:
             self.sounds.play(self.sounds.curse)
             self.particles.burst(px, py, self.downerup_color(DOWNERUP_CURSE), count=16, speed=180)
             self._announce("CURSED!", self.downerup_color(DOWNERUP_CURSE), life=1.0)
+            self._spawn_score_popup(px, py, "-5", DANGER)
 
         elif d.kind == DOWNERUP_BOMB:
             if POWERUP_SHIELD in self.active_powerups:
@@ -1764,9 +1867,37 @@ class Game:
         wave = 10 * (0.5 + 0.5 * ((t * 3 - i * 0.4) % 6.283 - 3.14) / 3.14)
         return clamp_color((color[0] + wave - 5, color[1] + wave - 5, color[2] + wave - 5))
 
+    def _draw_tongue_flick(self, board: pygame.Surface, fx: float, fy: float,
+                            dx: int, dy: int, t: float, phase: float) -> None:
+        """A forked tongue pokes out of the head every few seconds and
+        retracts - one of a couple of idle "alive" tics (with the blink)
+        that have nothing to do with gameplay, just personality."""
+        tongue_t = (t + phase * 1.7 + 1.3) % TONGUE_PERIOD
+        if tongue_t >= TONGUE_HOLD:
+            return
+        grow_until = TONGUE_HOLD * 0.4
+        if tongue_t < grow_until:
+            out = tongue_t / grow_until
+        else:
+            out = max(0.0, 1.0 - (tongue_t - grow_until) / (TONGUE_HOLD - grow_until))
+        base_x = fx * CELL_SIZE + CELL_SIZE // 2 + dx * (CELL_SIZE // 2 - 1)
+        base_y = fy * CELL_SIZE + CELL_SIZE // 2 + dy * (CELL_SIZE // 2 - 1)
+        tip_x, tip_y = base_x + dx * 7 * out, base_y + dy * 7 * out
+        color = (230, 60, 80)
+        pygame.draw.line(board, color, (base_x, base_y), (tip_x, tip_y), 2)
+        perp_x, perp_y = -dy, dx
+        fork = 3 * out
+        pygame.draw.line(board, color, (tip_x, tip_y),
+                          (tip_x + (perp_x - dx) * fork, tip_y + (perp_y - dy) * fork), 1)
+        pygame.draw.line(board, color, (tip_x, tip_y),
+                          (tip_x + (-perp_x - dx) * fork, tip_y + (-perp_y - dy) * fork), 1)
+
     def _draw_snake(self, board: pygame.Surface, snake: PlayerSnake, skin: list, alpha: float,
                      ghost_active: bool, alive: bool, name_tag: str) -> None:
         t = pygame.time.get_ticks() / 1000.0
+        # Desyncs blink/tongue timing between snakes so a 4-player match
+        # doesn't look like everyone's blinking in unison.
+        phase = (id(snake) % 1000) * 0.001
         positions = snake.render_positions(alpha) if alive else [(x, y) for x, y in snake.body]
         for i, (fx, fy) in enumerate(positions):
             base_color = skin[0] if i == 0 else skin[1]
@@ -1777,12 +1908,34 @@ class Game:
                 board.blit(s, (fx * CELL_SIZE, fy * CELL_SIZE))
             else:
                 r = pygame.Rect(fx * CELL_SIZE + 1, fy * CELL_SIZE + 1, CELL_SIZE - 2, CELL_SIZE - 2)
+                if alive and i == len(positions) - 1 and snake.tail_pop_anim < TAIL_GROW_POP_DURATION:
+                    # The newest tail segment scales in from nothing instead
+                    # of just appearing full-size - a little "pop" when you eat.
+                    scale = snake.tail_pop_anim / TAIL_GROW_POP_DURATION
+                    r = r.inflate(-r.width * (1 - scale), -r.height * (1 - scale))
+                if alive and i == 0 and snake.turn_anim < TURN_SQUASH_DURATION:
+                    # Cartoon squash-and-stretch on the head right after a
+                    # turn: stretched along the new heading, squashed across
+                    # it, easing back to normal - a turn reads as a deliberate
+                    # snap instead of the grid silently relabeling "direction".
+                    frac = snake.turn_anim / TURN_SQUASH_DURATION
+                    stretch = 1.0 + 0.3 * (1 - frac)
+                    squash = 1.0 - 0.22 * (1 - frac)
+                    dx, dy = snake.direction
+                    new_w = r.width * (stretch if dx else squash)
+                    new_h = r.height * (stretch if dy else squash)
+                    r = r.inflate(new_w - r.width, new_h - r.height)
                 pygame.draw.rect(board, color, r, border_radius=6 if i > 0 else 8)
                 if i == 0 and alive:
                     eye_dx, eye_dy = snake.direction
                     ex = fx * CELL_SIZE + CELL_SIZE // 2 + eye_dx * 4
                     ey = fy * CELL_SIZE + CELL_SIZE // 2 + eye_dy * 4
-                    pygame.draw.circle(board, (10, 10, 15), (int(ex), int(ey)), 3)
+                    blink_t = (t + phase) % BLINK_PERIOD
+                    if blink_t < BLINK_HOLD:
+                        pygame.draw.line(board, (10, 10, 15), (int(ex) - 3, int(ey)), (int(ex) + 3, int(ey)), 2)
+                    else:
+                        pygame.draw.circle(board, (10, 10, 15), (int(ex), int(ey)), 3)
+                    self._draw_tongue_flick(board, fx, fy, eye_dx, eye_dy, t, phase)
 
         if alive and positions:
             speed_tier = min(5, self.score // 60)
@@ -2015,6 +2168,8 @@ class Game:
             pygame.draw.circle(board, self.powerup_color(POWERUP_SHIELD), (int(cx), int(cy)), CELL_SIZE, width=2)
 
         self.particles.draw(board)
+        self._draw_score_popups(board)
+        self._draw_near_miss_flash(board)
         self._draw_wall_vignette(board)
         self._draw_announcer(board)
 
