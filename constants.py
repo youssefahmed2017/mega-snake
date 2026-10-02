@@ -375,7 +375,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.9.3"
+GAME_VERSION = "1.9.4"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker),
 # deployed 2026-10-01 to a free *.workers.dev subdomain. The MEGASNAKE_SERVER
@@ -385,6 +385,11 @@ ONLINE_SERVER_URL = "wss://megasnake-online.megasnake-online.workers.dev"
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.9.4", [
+        "Removed the outline ring/square drawn behind every food, power-up,",
+        "and downerup icon - they looked like a dot in a frame; the icons",
+        "stand on their own now",
+    ]),
     ("1.9.3", [
         "Redesigned food/power-up/downerup art - they're actual little icons",
         "now (apple, star, bolt, potion, bomb, skull, ghost, magnet, shield,",

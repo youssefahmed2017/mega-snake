@@ -1980,24 +1980,15 @@ class Game:
 
         for f in self.foods:
             cx, cy = f.x * CELL_SIZE + CELL_SIZE // 2, f.y * CELL_SIZE + CELL_SIZE // 2
-            radius = CELL_SIZE // 2 - 3
-            # A thin white outline behind every food icon so it never blends
-            # into a themed obstacle/ambient palette - Volcano's warm
-            # orange-red, in particular, used to camouflage plain red food.
-            pygame.draw.circle(board, (255, 255, 255), (cx, cy), radius + 1, 1)
-            self._draw_food_icon(board, f.kind, cx, cy, radius)
+            self._draw_food_icon(board, f.kind, cx, cy, CELL_SIZE // 2 - 2)
 
         for p in self.powerups:
             cx, cy = p.x * CELL_SIZE + CELL_SIZE // 2, p.y * CELL_SIZE + CELL_SIZE // 2
-            pulse = 2 + int(2 * abs((pygame.time.get_ticks() % 800) / 400 - 1))
-            pygame.draw.circle(board, self.powerup_color(p.kind), (cx, cy), CELL_SIZE // 2 - 4 + pulse, 1)
-            self._draw_powerup_icon(board, p.kind, cx, cy, CELL_SIZE // 2 - 4)
+            self._draw_powerup_icon(board, p.kind, cx, cy, CELL_SIZE // 2 - 2)
 
         for d in self.downerups:
             cx, cy = d.x * CELL_SIZE + CELL_SIZE // 2, d.y * CELL_SIZE + CELL_SIZE // 2
-            pulse = 2 + int(2 * abs((pygame.time.get_ticks() % 800) / 400 - 1))
-            pygame.draw.circle(board, self.downerup_color(d.kind), (cx, cy), CELL_SIZE // 2 - 4 + pulse, 1)
-            self._draw_downerup_icon(board, d.kind, cx, cy, CELL_SIZE // 2 - 4)
+            self._draw_downerup_icon(board, d.kind, cx, cy, CELL_SIZE // 2 - 2)
 
         for rival in self.rivals:
             if not rival.alive:
