@@ -375,7 +375,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.9.2"
+GAME_VERSION = "1.9.3"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker),
 # deployed 2026-10-01 to a free *.workers.dev subdomain. The MEGASNAKE_SERVER
@@ -385,6 +385,11 @@ ONLINE_SERVER_URL = "wss://megasnake-online.megasnake-online.workers.dev"
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.9.3", [
+        "Redesigned food/power-up/downerup art - they're actual little icons",
+        "now (apple, star, bolt, potion, bomb, skull, ghost, magnet, shield,",
+        "clock, snowflake, heart...) instead of plain circles and squares",
+    ]),
     ("1.9.2", [
         "Fixed Curse sometimes killing you instantly - it reversed controls",
         "correctly now instead of also reversing 'no key pressed'",

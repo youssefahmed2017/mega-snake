@@ -12,6 +12,7 @@ breakdown, persistent per-mode leaderboard.
 from __future__ import annotations
 
 import datetime
+import math
 import os
 import textwrap
 import random
@@ -88,6 +89,21 @@ font_mid = pygame.font.Font(_FONT_PATH, 24)
 font_mid.set_bold(True)
 font_small = pygame.font.Font(_FONT_PATH, 16)
 font_tiny = pygame.font.Font(_FONT_PATH, 13)
+
+_icon_font_cache: Dict[int, pygame.font.Font] = {}
+
+
+def _icon_font(size: int) -> pygame.font.Font:
+    """A tiny bold font for glyphs drawn *inside* an icon (just the Mult
+    power-up's "x2"), sized to whatever radius that icon happens to be
+    drawn at (board cell vs. a small HUD/legend dot) - cached since icons
+    redraw every frame."""
+    f = _icon_font_cache.get(size)
+    if f is None:
+        f = pygame.font.Font(_FONT_PATH, size)
+        f.set_bold(True)
+        _icon_font_cache[size] = f
+    return f
 # Chat used to pick a separate "broad coverage" font for emoji/Unicode (first
 # Segoe UI Emoji, later a per-character fallback scheme). Both attempts still
 # left chat text completely invisible on macOS with no clear way to diagnose
@@ -1964,35 +1980,24 @@ class Game:
 
         for f in self.foods:
             cx, cy = f.x * CELL_SIZE + CELL_SIZE // 2, f.y * CELL_SIZE + CELL_SIZE // 2
-            color = self.food_color(f.kind)
             radius = CELL_SIZE // 2 - 3
-            pygame.draw.circle(board, color, (cx, cy), radius)
-            # A thin white outline on every food item so it never blends into
-            # a themed obstacle/ambient palette - Volcano's warm orange-red,
-            # in particular, used to camouflage plain red "normal" food.
-            pygame.draw.circle(board, (255, 255, 255), (cx, cy), radius, 1)
+            # A thin white outline behind every food icon so it never blends
+            # into a themed obstacle/ambient palette - Volcano's warm
+            # orange-red, in particular, used to camouflage plain red food.
+            pygame.draw.circle(board, (255, 255, 255), (cx, cy), radius + 1, 1)
+            self._draw_food_icon(board, f.kind, cx, cy, radius)
 
         for p in self.powerups:
             cx, cy = p.x * CELL_SIZE + CELL_SIZE // 2, p.y * CELL_SIZE + CELL_SIZE // 2
-            color = self.powerup_color(p.kind)
             pulse = 2 + int(2 * abs((pygame.time.get_ticks() % 800) / 400 - 1))
-            rect = pygame.Rect(0, 0, CELL_SIZE - 6 + pulse, CELL_SIZE - 6 + pulse)
-            rect.center = (cx, cy)
-            pygame.draw.rect(board, color, rect, border_radius=6, width=2)
+            pygame.draw.circle(board, self.powerup_color(p.kind), (cx, cy), CELL_SIZE // 2 - 4 + pulse, 1)
+            self._draw_powerup_icon(board, p.kind, cx, cy, CELL_SIZE // 2 - 4)
 
         for d in self.downerups:
             cx, cy = d.x * CELL_SIZE + CELL_SIZE // 2, d.y * CELL_SIZE + CELL_SIZE // 2
-            color = self.downerup_color(d.kind)
             pulse = 2 + int(2 * abs((pygame.time.get_ticks() % 800) / 400 - 1))
-            rect = pygame.Rect(0, 0, CELL_SIZE - 6 + pulse, CELL_SIZE - 6 + pulse)
-            rect.center = (cx, cy)
-            pygame.draw.rect(board, color, rect, border_radius=6, width=2)
-            radius = CELL_SIZE // 2 - 3
-            if d.kind == DOWNERUP_BOMB:
-                pygame.draw.circle(board, DANGER, (cx, cy), radius, 2)
-            elif d.kind == DOWNERUP_CURSE:
-                pygame.draw.line(board, (255, 255, 255), (cx - 4, cy - 4), (cx + 4, cy + 4), 2)
-                pygame.draw.line(board, (255, 255, 255), (cx - 4, cy + 4), (cx + 4, cy - 4), 2)
+            pygame.draw.circle(board, self.downerup_color(d.kind), (cx, cy), CELL_SIZE // 2 - 4 + pulse, 1)
+            self._draw_downerup_icon(board, d.kind, cx, cy, CELL_SIZE // 2 - 4)
 
         for rival in self.rivals:
             if not rival.alive:
@@ -2106,9 +2111,8 @@ class Game:
             screen.blit(font_small.render("ACTIVE:", True, TEXT_DIM), (x, y))
             y += 18
             for kind, remaining in self.active_powerups.items():
-                color = self.powerup_color(kind)
-                pygame.draw.circle(screen, color, (x + 6, y + 7), 5)
-                screen.blit(font_tiny.render(f"{kind}  {remaining:0.1f}s", True, TEXT), (x + 18, y))
+                self._draw_powerup_icon(screen, kind, x + 7, y + 7, radius=7)
+                screen.blit(font_tiny.render(f"{kind}  {remaining:0.1f}s", True, TEXT), (x + 20, y))
                 y += 18
             y += 6
 
@@ -2124,13 +2128,13 @@ class Game:
         screen.blit(font_tiny.render(f"Volume: {mute_state}", True, TEXT_DIM), (x, y)); y += 20
 
         legend = [
-            (self.food_color(FOOD_NORMAL), "Food"),
-            (self.food_color(FOOD_GOLDEN), "Golden (+50)"),
-            (self.downerup_color(DOWNERUP_CURSE), "Curse (reversed!)"),
-            (self.downerup_color(DOWNERUP_BOMB), "Bomb (danger!)"),
+            (self._draw_food_icon, FOOD_NORMAL, "Food"),
+            (self._draw_food_icon, FOOD_GOLDEN, "Golden (+50)"),
+            (self._draw_downerup_icon, DOWNERUP_CURSE, "Curse (reversed!)"),
+            (self._draw_downerup_icon, DOWNERUP_BOMB, "Bomb (danger!)"),
         ]
-        for color, label in legend:
-            pygame.draw.circle(screen, color, (x + 6, y + 6), 5)
+        for draw_fn, kind, label in legend:
+            draw_fn(screen, kind, x + 6, y + 6, radius=6)
             screen.blit(font_tiny.render(label, True, TEXT_DIM), (x + 18, y - 4))
             y += 15
 
@@ -2918,19 +2922,138 @@ class Game:
         foot = font_small.render("Esc: back", True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
 
-    def _draw_food_icon(self, kind: str, cx: int, cy: int) -> None:
-        radius = 7
-        pygame.draw.circle(screen, self.food_color(kind), (cx, cy), radius)
+    def _draw_food_icon(self, surface: pygame.Surface, kind: str, cx: float, cy: float, radius: float = 7) -> None:
+        """Food/power-up/downerup icons are drawn with simple vector shapes
+        (no image assets) so each kind reads as the thing it represents even
+        at cell size - an apple, a star, a bolt, a bomb - instead of a plain
+        colored circle or square. Same shapes are used on the board and in
+        the small HUD/legend/how-to-play dots, just at a different radius."""
+        color = self.food_color(kind)
+        cx, cy = int(cx), int(cy)
+        if kind == FOOD_NORMAL:
+            pygame.draw.circle(surface, color, (cx, cy + int(radius * 0.1)), int(radius))
+            pygame.draw.line(surface, (120, 80, 40), (cx, cy - int(radius)),
+                              (cx + int(radius * 0.35), cy - int(radius * 1.35)), max(1, int(radius * 0.22)))
+            leaf = [(cx + radius * 0.3, cy - radius * 1.1), (cx + radius * 0.95, cy - radius * 1.25),
+                    (cx + radius * 0.45, cy - radius * 0.7)]
+            pygame.draw.polygon(surface, (90, 200, 90), leaf)
+        elif kind == FOOD_GOLDEN:
+            outer = self._star_points(cx, cy, radius * 1.15, radius * 0.45)
+            pygame.draw.polygon(surface, color, outer)
+            pygame.draw.polygon(surface, (255, 255, 230), outer, 1)
+        elif kind == FOOD_SPEED:
+            bolt = [
+                (cx + radius * 0.15, cy - radius * 1.1), (cx - radius * 0.55, cy + radius * 0.15),
+                (cx - radius * 0.05, cy + radius * 0.15), (cx - radius * 0.3, cy + radius * 1.1),
+                (cx + radius * 0.55, cy - radius * 0.1), (cx + radius * 0.05, cy - radius * 0.1),
+            ]
+            pygame.draw.polygon(surface, color, bolt)
+        elif kind == FOOD_SHRINK:
+            neck = (cx - radius * 0.22, cy - radius * 1.1, radius * 0.44, radius * 0.5)
+            pygame.draw.rect(surface, color, neck)
+            pygame.draw.circle(surface, color, (cx, cy + int(radius * 0.15)), int(radius * 0.8))
+            pygame.draw.rect(surface, (255, 255, 255), neck, 1)
+            pygame.draw.circle(surface, (255, 255, 255), (cx, cy + int(radius * 0.15)), int(radius * 0.8), 1)
 
-    def _draw_downerup_icon(self, kind: str, cx: int, cy: int) -> None:
-        radius = 7
-        pygame.draw.rect(screen, self.downerup_color(kind), (cx - radius, cy - radius, radius * 2, radius * 2),
-                          width=2, border_radius=4)
+    @staticmethod
+    def _star_points(cx: float, cy: float, outer: float, inner: float, n: int = 5) -> List[Tuple[float, float]]:
+        pts = []
+        rot = -math.pi / 2
+        for i in range(n * 2):
+            ang = rot + i * math.pi / n
+            rad = outer if i % 2 == 0 else inner
+            pts.append((cx + rad * math.cos(ang), cy + rad * math.sin(ang)))
+        return pts
+
+    def _draw_downerup_icon(self, surface: pygame.Surface, kind: str, cx: float, cy: float, radius: float = 7) -> None:
+        color = self.downerup_color(kind)
+        cx, cy = int(cx), int(cy)
         if kind == DOWNERUP_BOMB:
-            pygame.draw.circle(screen, DANGER, (cx, cy), radius - 2, 2)
+            pygame.draw.circle(surface, color, (cx, cy + int(radius * 0.15)), int(radius * 0.85))
+            pygame.draw.circle(surface, (90, 90, 95), (cx - int(radius * 0.3), cy - int(radius * 0.1)),
+                                max(1, int(radius * 0.22)))
+            fuse_end = (cx + int(radius * 0.6), cy - int(radius * 1.1))
+            pygame.draw.line(surface, (150, 100, 50), (cx + int(radius * 0.3), cy - int(radius * 0.6)),
+                              fuse_end, max(1, int(radius * 0.18)))
+            pygame.draw.circle(surface, (255, 200, 60), fuse_end, max(2, int(radius * 0.22)))
         elif kind == DOWNERUP_CURSE:
-            pygame.draw.line(screen, (255, 255, 255), (cx - 3, cy - 3), (cx + 3, cy + 3), 2)
-            pygame.draw.line(screen, (255, 255, 255), (cx - 3, cy + 3), (cx + 3, cy - 3), 2)
+            pygame.draw.circle(surface, color, (cx, cy), int(radius))
+            skull = (235, 235, 245)
+            pygame.draw.circle(surface, skull, (cx, cy - int(radius * 0.2)), int(radius * 0.52))
+            pygame.draw.rect(surface, skull, (cx - radius * 0.32, cy + radius * 0.05, radius * 0.64, radius * 0.3),
+                              border_radius=max(1, int(radius * 0.1)))
+            eye_r = max(1, int(radius * 0.13))
+            pygame.draw.circle(surface, color, (cx - int(radius * 0.2), cy - int(radius * 0.22)), eye_r)
+            pygame.draw.circle(surface, color, (cx + int(radius * 0.2), cy - int(radius * 0.22)), eye_r)
+
+    def _draw_powerup_icon(self, surface: pygame.Surface, kind: str, cx: float, cy: float, radius: float = 7) -> None:
+        color = self.powerup_color(kind)
+        cx, cy = int(cx), int(cy)
+        if kind == POWERUP_GHOST:
+            top_cy = cy - radius * 0.15
+            dome = [(cx + radius * 0.75 * math.cos(math.radians(a)), top_cy + radius * 0.75 * math.sin(math.radians(a)))
+                    for a in range(180, 361, 30)]
+            bottom_y = cy + radius * 0.75
+            right_x, left_x = cx + radius * 0.75, cx - radius * 0.75
+            scallop = [
+                (right_x, bottom_y - radius * 0.3), (right_x - radius * 0.5, bottom_y),
+                (cx + radius * 0.25, bottom_y - radius * 0.3), (cx - radius * 0.25, bottom_y),
+                (left_x + radius * 0.5, bottom_y - radius * 0.3), (left_x, bottom_y),
+            ]
+            pygame.draw.polygon(surface, color, dome + scallop)
+            eye = (40, 40, 60)
+            pygame.draw.circle(surface, eye, (cx - int(radius * 0.28), cy - int(radius * 0.1)), max(1, int(radius * 0.15)))
+            pygame.draw.circle(surface, eye, (cx + int(radius * 0.28), cy - int(radius * 0.1)), max(1, int(radius * 0.15)))
+        elif kind == POWERUP_MAGNET:
+            leg_w = max(2, int(radius * 0.32))
+            top_y = cy - radius * 0.9
+            bottom_y = cy + radius * 0.15
+            left_x = cx - radius * 0.5
+            right_x = cx + radius * 0.5 - leg_w
+            pygame.draw.rect(surface, color, (left_x, top_y, leg_w, bottom_y - top_y), border_radius=leg_w // 2)
+            pygame.draw.rect(surface, color, (right_x, top_y, leg_w, bottom_y - top_y), border_radius=leg_w // 2)
+            arc_rect = (left_x, cy - radius * 0.45, right_x + leg_w - left_x, radius * 1.1)
+            pygame.draw.arc(surface, color, arc_rect, math.pi, 2 * math.pi, leg_w)
+            tip = (235, 235, 245)
+            tip_h = max(2, int(radius * 0.3))
+            pygame.draw.rect(surface, tip, (left_x, top_y, leg_w, tip_h))
+            pygame.draw.rect(surface, tip, (right_x, top_y, leg_w, tip_h))
+        elif kind == POWERUP_SHIELD:
+            pts = [
+                (cx - radius * 0.8, cy - radius * 0.7), (cx + radius * 0.8, cy - radius * 0.7),
+                (cx + radius * 0.7, cy + radius * 0.15), (cx, cy + radius), (cx - radius * 0.7, cy + radius * 0.15),
+            ]
+            pygame.draw.polygon(surface, color, pts)
+            w = max(1, int(radius * 0.16))
+            pygame.draw.line(surface, (255, 255, 255), (cx, cy - radius * 0.35), (cx, cy + radius * 0.35), w)
+            pygame.draw.line(surface, (255, 255, 255), (cx - radius * 0.3, cy), (cx + radius * 0.3, cy), w)
+        elif kind == POWERUP_SLOWMO:
+            pygame.draw.circle(surface, color, (cx, cy), int(radius * 0.85), max(1, int(radius * 0.18)))
+            pygame.draw.line(surface, color, (cx, cy), (cx, cy - radius * 0.5), max(1, int(radius * 0.16)))
+            pygame.draw.line(surface, color, (cx, cy), (cx + radius * 0.35, cy + radius * 0.15), max(1, int(radius * 0.16)))
+        elif kind == POWERUP_MULT:
+            pygame.draw.circle(surface, color, (cx, cy), int(radius * 0.9))
+            label = _icon_font(max(8, int(radius * 1.3))).render("x2", True, (30, 25, 15))
+            surface.blit(label, (cx - label.get_width() // 2, cy - label.get_height() // 2))
+        elif kind == POWERUP_FREEZE:
+            for ang_deg in range(0, 360, 60):
+                ang = math.radians(ang_deg)
+                dx, dy = math.cos(ang), math.sin(ang)
+                end = (cx + radius * 0.9 * dx, cy + radius * 0.9 * dy)
+                pygame.draw.line(surface, color, (cx, cy), end, max(1, int(radius * 0.16)))
+                bx, by = cx + radius * 0.55 * dx, cy + radius * 0.55 * dy
+                perp = ang + math.pi / 2
+                pdx, pdy = math.cos(perp) * radius * 0.22, math.sin(perp) * radius * 0.22
+                pygame.draw.line(surface, color, (bx - pdx, by - pdy), (bx + pdx, by + pdy), max(1, int(radius * 0.12)))
+        elif kind == POWERUP_TELEPORT:
+            for frac in (1.0, 0.6, 0.25):
+                pygame.draw.circle(surface, color, (cx, cy), max(1, int(radius * frac)), 1)
+        elif kind == POWERUP_REVIVE:
+            lobe_r = max(1, int(radius * 0.45))
+            pygame.draw.circle(surface, color, (cx - int(radius * 0.35), cy - int(radius * 0.2)), lobe_r)
+            pygame.draw.circle(surface, color, (cx + int(radius * 0.35), cy - int(radius * 0.2)), lobe_r)
+            pts = [(cx - radius * 0.8, cy - radius * 0.05), (cx, cy + radius * 0.9), (cx + radius * 0.8, cy - radius * 0.05)]
+            pygame.draw.polygon(surface, color, pts)
 
     def draw_howto(self) -> None:
         screen.fill(BG)
@@ -2956,7 +3079,7 @@ class Game:
             (FOOD_SHRINK, "Shrink: lose 2 length, -5"),
         ]
         for kind, desc in foods:
-            self._draw_food_icon(kind, left_x + 8, y + 8)
+            self._draw_food_icon(screen, kind, left_x + 8, y + 8)
             screen.blit(font_tiny.render(desc, True, TEXT), (left_x + 24, y + 1))
             y += 22
 
@@ -2967,7 +3090,7 @@ class Game:
             (DOWNERUP_BOMB, "Bomb (ring): instant death unless shielded"),
         ]
         for kind, desc in downerups:
-            self._draw_downerup_icon(kind, left_x + 8, y + 8)
+            self._draw_downerup_icon(screen, kind, left_x + 8, y + 8)
             screen.blit(font_tiny.render(desc, True, TEXT), (left_x + 24, y + 1))
             y += 22
 
@@ -2994,8 +3117,7 @@ class Game:
             (POWERUP_REVIVE, "Revive: brings your Coop/LAN teammate back (only spawns when they're down)"),
         ]
         for kind, desc in powerups:
-            rect = pygame.Rect(right_x + 1, y + 1, 14, 14)
-            pygame.draw.rect(screen, self.powerup_color(kind), rect, width=2, border_radius=4)
+            self._draw_powerup_icon(screen, kind, right_x + 8, y + 8)
             screen.blit(font_tiny.render(desc, True, TEXT), (right_x + 24, y + 1))
             y += 22
 
