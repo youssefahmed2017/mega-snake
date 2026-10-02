@@ -9,6 +9,7 @@ from constants import (
     FOOD_WEIGHTS, GRID_W, GRID_H,
     POWERUP_GHOST, POWERUP_MAGNET, POWERUP_SHIELD, POWERUP_SLOWMO, POWERUP_MULT,
     POWERUP_FREEZE, POWERUP_TELEPORT,
+    DOWNERUP_TYPES, DOWNERUP_SPAWN_CHANCE, DOWNERUP_TTL,
 )
 
 POWERUP_TYPES = [
@@ -30,6 +31,16 @@ class PowerUp:
     y: int
     kind: str
     ttl: float = 12.0  # despawns if not collected
+
+
+@dataclass
+class Downerup:
+    """A hazard pickup (bomb, curse): spawned and collected like a power-up,
+    not mixed into the food pool - see constants.DOWNERUP_* for why."""
+    x: int
+    y: int
+    kind: str
+    ttl: float = DOWNERUP_TTL  # despawns if not collected
 
 
 def random_free_cell(occupied: Set[Tuple[int, int]], rng: random.Random = random) -> Tuple[int, int]:
@@ -63,6 +74,16 @@ def maybe_spawn_powerup(occupied: Set[Tuple[int, int]], existing: List[PowerUp],
     kind = random.choice(POWERUP_TYPES)
     x, y = random_free_cell(occupied)
     return PowerUp(x, y, kind)
+
+
+def maybe_spawn_downerup(occupied: Set[Tuple[int, int]], existing: List[Downerup], enabled: bool) -> Optional[Downerup]:
+    if not enabled or len(existing) >= 1:
+        return None
+    if random.random() > DOWNERUP_SPAWN_CHANCE:
+        return None
+    kind = random.choice(DOWNERUP_TYPES)
+    x, y = random_free_cell(occupied)
+    return Downerup(x, y, kind)
 
 
 def maybe_spawn_portal_pair(occupied: Set[Tuple[int, int]]) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:

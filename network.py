@@ -93,8 +93,11 @@ class LineSocket:
             self.connected = False
 
     def send(self, obj: dict) -> bool:
+        return self.send_raw((json.dumps(obj) + "\n").encode("utf-8"))
+
+    def send_raw(self, line: bytes) -> bool:
         try:
-            self.sock.sendall((json.dumps(obj) + "\n").encode("utf-8"))
+            self.sock.sendall(line)
             return True
         except OSError as e:
             self.error = self.error or str(e)
@@ -190,9 +193,12 @@ class Host:
         return items
 
     def send(self, obj: dict) -> bool:
+        # Snapshots go out to all 1-3 guests every ~100ms; encode once instead
+        # of re-serializing the same (sometimes sizeable) payload per guest.
+        line = (json.dumps(obj) + "\n").encode("utf-8")
         ok = True
         for link in self.links.values():
-            ok = link.send(obj) and ok
+            ok = link.send_raw(line) and ok
         return ok
 
     def close_slot(self, slot: str) -> None:

@@ -51,16 +51,12 @@ FOOD_NORMAL = "normal"
 FOOD_GOLDEN = "golden"
 FOOD_SPEED = "speed"
 FOOD_SHRINK = "shrink"
-FOOD_BOMB = "bomb"
-FOOD_CURSE = "curse"
 
 FOOD_WEIGHTS = {
     FOOD_NORMAL: 56,
     FOOD_GOLDEN: 10,
     FOOD_SPEED: 10,
     FOOD_SHRINK: 8,
-    FOOD_BOMB: 9,
-    FOOD_CURSE: 7,
 }
 
 FOOD_COLORS = {
@@ -68,9 +64,26 @@ FOOD_COLORS = {
     FOOD_GOLDEN: GOLD,
     FOOD_SPEED: (90, 200, 255),
     FOOD_SHRINK: PURPLE,
-    FOOD_BOMB: (30, 30, 30),
-    FOOD_CURSE: CURSE_COLOR,
 }
+
+# "Downerups": hazard pickups that spawn and get collected like power-ups
+# (rare, timed, their own on-field cap) instead of being mixed into the
+# common food pool - so they read as a deliberate risk you can choose to
+# dodge, not as 1-in-6 nutrition that occasionally kills you.
+DOWNERUP_BOMB = "bomb"
+DOWNERUP_CURSE = "curse"
+
+DOWNERUP_TYPES = [DOWNERUP_BOMB, DOWNERUP_CURSE]
+
+DOWNERUP_COLORS = {
+    DOWNERUP_BOMB: (30, 30, 30),
+    DOWNERUP_CURSE: CURSE_COLOR,
+}
+
+# Downerups spawn independently of (and rarer than) power-ups, and only one
+# is ever on the field at a time - see maybe_spawn_downerup() in food.py.
+DOWNERUP_SPAWN_CHANCE = 0.006
+DOWNERUP_TTL = 10.0
 
 POWERUP_GHOST = "ghost"
 POWERUP_MAGNET = "magnet"
@@ -99,8 +112,11 @@ COLORBLIND_FOOD_COLORS = {
     FOOD_GOLDEN: (240, 228, 66),
     FOOD_SPEED: (86, 180, 233),
     FOOD_SHRINK: (204, 121, 167),
-    FOOD_BOMB: (30, 30, 30),
-    FOOD_CURSE: (0, 114, 178),
+}
+
+COLORBLIND_DOWNERUP_COLORS = {
+    DOWNERUP_BOMB: (30, 30, 30),
+    DOWNERUP_CURSE: (0, 114, 178),
 }
 
 COLORBLIND_POWERUP_COLORS = {
@@ -359,7 +375,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "1.9.1"
+GAME_VERSION = "1.9.2"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker),
 # deployed 2026-10-01 to a free *.workers.dev subdomain. The MEGASNAKE_SERVER
@@ -369,6 +385,14 @@ ONLINE_SERVER_URL = "wss://megasnake-online.megasnake-online.workers.dev"
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("1.9.2", [
+        "Fixed Curse sometimes killing you instantly - it reversed controls",
+        "correctly now instead of also reversing 'no key pressed'",
+        "Bomb and Curse are now their own 'downerup' pickups, not food - a",
+        "Magnet or Teleport power-up can no longer drag/warp you into one",
+        "Reduced multiplayer bandwidth further: match info (mode/map/skin) is",
+        "sent once per session instead of on every snapshot",
+    ]),
     ("1.9.1", [
         "LAN and Online multiplayer now support up to four players",
         "Reduced multiplayer bandwidth with capped state snapshots and smoother remote rendering",

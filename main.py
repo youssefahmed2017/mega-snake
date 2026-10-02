@@ -30,7 +30,8 @@ from constants import (
     BG, GRID_LINE, SIDEBAR_BG, TEXT, TEXT_DIM, ACCENT, DANGER, GOLD, GREEN, PURPLE,
     SNAKE_SKINS, SKIN_UNLOCK_REQUIREMENT, P2_COLOR, PLAYER_COLORS, PLAYER_LABELS, MAX_PLAYERS,
     TRAIL_EFFECTS, TRAIL_NAMES,
-    FOOD_NORMAL, FOOD_GOLDEN, FOOD_SPEED, FOOD_SHRINK, FOOD_BOMB, FOOD_CURSE, FOOD_COLORS,
+    FOOD_NORMAL, FOOD_GOLDEN, FOOD_SPEED, FOOD_SHRINK, FOOD_COLORS,
+    DOWNERUP_BOMB, DOWNERUP_CURSE, DOWNERUP_COLORS, COLORBLIND_DOWNERUP_COLORS,
     POWERUP_GHOST, POWERUP_MAGNET, POWERUP_SHIELD, POWERUP_SLOWMO, POWERUP_MULT,
     POWERUP_FREEZE, POWERUP_TELEPORT, POWERUP_REVIVE, POWERUP_COLORS, POWERUP_DURATIONS, CURSE_DURATION,
     PORTAL_A, PORTAL_B, MODES, MODE_CONFIG, MODE_DESC, DIFFICULTIES, DIFFICULTY_SPEED_MULT,
@@ -40,7 +41,10 @@ from constants import (
 )
 from snake import PlayerSnake
 from enemy import EnemySnake
-from food import Food, PowerUp, spawn_food, maybe_spawn_powerup, maybe_spawn_portal_pair, random_free_cell
+from food import (
+    Food, PowerUp, Downerup, spawn_food, maybe_spawn_powerup, maybe_spawn_downerup,
+    maybe_spawn_portal_pair, random_free_cell,
+)
 from particles import ParticleSystem
 from achievements import ACHIEVEMENTS, ACHIEVEMENTS_BY_ID, AchievementTracker
 from audio import SoundBank
@@ -258,6 +262,7 @@ class Game:
         self.snapshot_seq = 0
         self.last_snapshot_seq = -1
         self.snapshot_age = NETWORK_SNAPSHOT_INTERVAL
+        self.match_meta_sent = False
 
         self.chat_active = False
         self.chat_input = ""
@@ -369,6 +374,9 @@ class Game:
 
     def powerup_color(self, kind: str) -> Tuple[int, int, int]:
         return (COLORBLIND_POWERUP_COLORS if self.colorblind else POWERUP_COLORS)[kind]
+
+    def downerup_color(self, kind: str) -> Tuple[int, int, int]:
+        return (COLORBLIND_DOWNERUP_COLORS if self.colorblind else DOWNERUP_COLORS)[kind]
 
     def _quest_progress(self) -> Tuple[int, int]:
         today_iso = datetime.date.today().isoformat()
@@ -537,13 +545,9 @@ class Game:
 
     def _build_snapshot(self, game_over: bool = False) -> dict:
         self.snapshot_seq += 1
-        return {
+        snap = {
             "type": "state",
             "seq": self.snapshot_seq,
-            "mode": self.mode_name(),
-            "ruleset": self.lan_ruleset_name,
-            "map": self.map_name,
-            "skin_p1": SKIN_NAMES[self.skin_idx],
             "match_size": self.match_size,
             "players": [
                 {"body": [list(c) for c in p.body], "dir": list(p.direction), "alive": self.players_alive[i]}
@@ -552,6 +556,7 @@ class Game:
             ],
             "foods": [{"x": f.x, "y": f.y, "kind": f.kind} for f in self.foods],
             "powerups": [{"x": p.x, "y": p.y, "kind": p.kind} for p in self.powerups],
+            "downerups": [{"x": d.x, "y": d.y, "kind": d.kind} for d in self.downerups],
             "obstacles": [list(o) for o in self.obstacles],
             "portal_pair": [list(self.portal_pair[0]), list(self.portal_pair[1])] if self.portal_pair else None,
             "active_powerups": dict(self.active_powerups),
@@ -562,6 +567,18 @@ class Game:
             "game_over": game_over,
             "game_over_reason": self.game_over_reason if game_over else "",
         }
+        # mode/ruleset/map/skin never change once a match is running, so only
+        # put them on the wire once per session instead of on every one of
+        # the ~10 snapshots/sec this gets called for over a match's lifetime.
+        # apply_snapshot() already treats all four as optional (see its
+        # `snap.get(...) in <enum>` guards), so omitting them is safe.
+        if not self.match_meta_sent or game_over:
+            snap["mode"] = self.mode_name()
+            snap["ruleset"] = self.lan_ruleset_name
+            snap["map"] = self.map_name
+            snap["skin_p1"] = SKIN_NAMES[self.skin_idx]
+            self.match_meta_sent = True
+        return snap
 
     def apply_snapshot(self, snap: dict) -> None:
         seq = snap.get("seq")
@@ -587,6 +604,7 @@ class Game:
 
         self.foods = [Food(f["x"], f["y"], f["kind"]) for f in snap["foods"]]
         self.powerups = [PowerUp(p["x"], p["y"], p["kind"]) for p in snap["powerups"]]
+        self.downerups = [Downerup(d["x"], d["y"], d["kind"]) for d in snap.get("downerups", [])]
         self.obstacles = set(tuple(o) for o in snap["obstacles"])
         self.portal_pair = (tuple(snap["portal_pair"][0]), tuple(snap["portal_pair"][1])) if snap["portal_pair"] else None
         self.active_powerups = dict(snap["active_powerups"])
@@ -695,6 +713,7 @@ class Game:
         self.snapshot_seq = 0
         self.last_snapshot_seq = -1
         self.snapshot_age = NETWORK_SNAPSHOT_INTERVAL
+        self.match_meta_sent = False
         if role == "host":
             self.lan_link = self.lan_host.link if self.lan_online else self.lan_host
         # else: the guest's self.lan_link was already set in _lan_connecting_poll
@@ -955,6 +974,7 @@ class Game:
         self._ambient_spawn_accum = 0.0
         self.foods: List[Food] = []
         self.powerups: List[PowerUp] = []
+        self.downerups: List[Downerup] = []
         self.active_powerups: Dict[str, float] = {}
         self.portal_pair: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None
         self.p1_portal_lock = 0
@@ -1038,6 +1058,8 @@ class Game:
             occ.add((f.x, f.y))
         for p in self.powerups:
             occ.add((p.x, p.y))
+        for d in self.downerups:
+            occ.add((d.x, d.y))
         if self.portal_pair:
             occ.add(self.portal_pair[0])
             occ.add(self.portal_pair[1])
@@ -1157,6 +1179,17 @@ class Game:
         new_p = maybe_spawn_powerup(self.occupied_cells(), self.powerups, cfg["powerups"])
         if new_p:
             self.powerups.append(new_p)
+
+        # Downerups despawn on a timer like power-ups; actually picking one up
+        # happens in _tick() instead (grid-step granularity), so it works the
+        # same way food does for every connected player, not just p1/p2.
+        for d in list(self.downerups):
+            d.ttl -= dt
+            if d.ttl <= 0:
+                self.downerups.remove(d)
+        new_d = maybe_spawn_downerup(self.occupied_cells(), self.downerups, cfg["powerups"])
+        if new_d:
+            self.downerups.append(new_d)
 
         active = self.players_alive[:self.match_size]
         if cfg["coop"] and any(active) and not all(active):
@@ -1363,6 +1396,21 @@ class Game:
         self.sounds.play(self.sounds.unlock)
         self._announce("REVIVED!", self.powerup_color(POWERUP_REVIVE), life=1.5)
 
+    def _p1_set_direction(self, d: Tuple[int, int]) -> None:
+        """Route a direction key through this instead of calling
+        self.player.set_direction directly, so Curse (controls reversed) can
+        flip the *key press* itself rather than whatever happens to be queued
+        for the next step. Flipping the queued direction instead would also
+        flip "no new key pressed, keep going straight" into a 180 - which is
+        a self-collision for any snake longer than one cell, i.e. an
+        unavoidable, instant death every single tick you didn't react fast
+        enough. PlayerSnake.set_direction still blocks reversing into your own
+        neck relative to your *true* current heading, so a cursed player
+        turning squarely into themselves is still refused, same as normal."""
+        if self.curse_timer > 0:
+            d = (-d[0], -d[1])
+        self.player.set_direction(d)
+
     def _blocking_set(self, exclude_tag: str) -> set:
         s = set(self.obstacles)
         for i, snake in enumerate(self.players):
@@ -1376,7 +1424,6 @@ class Game:
     def _tick(self) -> None:
         cfg = self.mode_cfg()
         ghost = POWERUP_GHOST in self.active_powerups
-        cursed = self.curse_timer > 0
         wrap = cfg["wrap"] or ghost
 
         movers: List[Tuple[str, PlayerSnake]] = []
@@ -1390,10 +1437,6 @@ class Game:
         prev_heads = {}
         for tag, snake in movers:
             prev_heads[tag] = snake.head
-            if cursed and tag == "p1":
-                # Curse inverts the *intended* direction for whichever way was queued.
-                dx, dy = snake.pending_direction
-                snake.pending_direction = (-dx, -dy) if (dx, dy) != (0, 0) else (dx, dy)
             snake.step(wrap=wrap)
 
         for tag, snake in movers:
@@ -1421,6 +1464,10 @@ class Game:
                 for f in list(self.foods):
                     if (f.x, f.y) == (hx, hy):
                         self._consume_food(f, snake)
+                for d in list(self.downerups):
+                    if (d.x, d.y) == (hx, hy):
+                        self.downerups.remove(d)
+                        self._consume_downerup(tag, d)
 
         if self.ghost_enabled and self.player_alive:
             if len(self.recording_trail) < GHOST_MAX_TICKS:
@@ -1557,15 +1604,24 @@ class Game:
             self.sounds.play(self.sounds.shrink)
             self.particles.burst(px, py, self.food_color(FOOD_SHRINK), count=12)
 
-        elif f.kind == FOOD_CURSE:
+        self._spawn_food()
+
+    def _consume_downerup(self, tag: str, d: Downerup) -> None:
+        """Bomb/curse: these are downerups (hazard power-ups), not food - see
+        constants.DOWNERUP_* - so unlike _consume_food this never touches
+        self.foods, and a Magnet or Teleport power-up can no longer drag you
+        into one by accident."""
+        px, py = grid_to_px(*self._center((d.x, d.y)))
+
+        if d.kind == DOWNERUP_CURSE:
             self.curse_timer = CURSE_DURATION
             self.score = max(0, self.score - 5)
             self.score_breakdown["penalty"] -= 5
             self.sounds.play(self.sounds.curse)
-            self.particles.burst(px, py, self.food_color(FOOD_CURSE), count=16, speed=180)
-            self._announce("CURSED!", self.food_color(FOOD_CURSE), life=1.0)
+            self.particles.burst(px, py, self.downerup_color(DOWNERUP_CURSE), count=16, speed=180)
+            self._announce("CURSED!", self.downerup_color(DOWNERUP_CURSE), life=1.0)
 
-        elif f.kind == FOOD_BOMB:
+        elif d.kind == DOWNERUP_BOMB:
             if POWERUP_SHIELD in self.active_powerups:
                 del self.active_powerups[POWERUP_SHIELD]
                 self.stats["bombs_survived"] = self.stats.get("bombs_survived", 0) + 1
@@ -1576,12 +1632,7 @@ class Game:
                 self.particles.burst(px, py, DANGER, count=30, speed=260, life=0.7)
                 self.shake(0.35, 8)
                 self.sounds.play(self.sounds.bomb)
-                tag = "p1" if snake is self.player else "p2"
                 self._kill_snake(tag, "You detonated a bomb.")
-                self._spawn_food()
-                return
-
-        self._spawn_food()
 
     # ---------- death / game over ----------
 
@@ -1916,16 +1967,10 @@ class Game:
             color = self.food_color(f.kind)
             radius = CELL_SIZE // 2 - 3
             pygame.draw.circle(board, color, (cx, cy), radius)
-            # A thin white outline on every food item (not just bomb/curse) so
-            # it never blends into a themed obstacle/ambient palette - Volcano's
-            # warm orange-red, in particular, used to camouflage plain red
-            # "normal" food right next to it.
+            # A thin white outline on every food item so it never blends into
+            # a themed obstacle/ambient palette - Volcano's warm orange-red,
+            # in particular, used to camouflage plain red "normal" food.
             pygame.draw.circle(board, (255, 255, 255), (cx, cy), radius, 1)
-            if f.kind == FOOD_BOMB:
-                pygame.draw.circle(board, DANGER, (cx, cy), radius, 2)
-            elif f.kind == FOOD_CURSE:
-                pygame.draw.line(board, (255, 255, 255), (cx - 4, cy - 4), (cx + 4, cy + 4), 2)
-                pygame.draw.line(board, (255, 255, 255), (cx - 4, cy + 4), (cx + 4, cy - 4), 2)
 
         for p in self.powerups:
             cx, cy = p.x * CELL_SIZE + CELL_SIZE // 2, p.y * CELL_SIZE + CELL_SIZE // 2
@@ -1934,6 +1979,20 @@ class Game:
             rect = pygame.Rect(0, 0, CELL_SIZE - 6 + pulse, CELL_SIZE - 6 + pulse)
             rect.center = (cx, cy)
             pygame.draw.rect(board, color, rect, border_radius=6, width=2)
+
+        for d in self.downerups:
+            cx, cy = d.x * CELL_SIZE + CELL_SIZE // 2, d.y * CELL_SIZE + CELL_SIZE // 2
+            color = self.downerup_color(d.kind)
+            pulse = 2 + int(2 * abs((pygame.time.get_ticks() % 800) / 400 - 1))
+            rect = pygame.Rect(0, 0, CELL_SIZE - 6 + pulse, CELL_SIZE - 6 + pulse)
+            rect.center = (cx, cy)
+            pygame.draw.rect(board, color, rect, border_radius=6, width=2)
+            radius = CELL_SIZE // 2 - 3
+            if d.kind == DOWNERUP_BOMB:
+                pygame.draw.circle(board, DANGER, (cx, cy), radius, 2)
+            elif d.kind == DOWNERUP_CURSE:
+                pygame.draw.line(board, (255, 255, 255), (cx - 4, cy - 4), (cx + 4, cy + 4), 2)
+                pygame.draw.line(board, (255, 255, 255), (cx - 4, cy + 4), (cx + 4, cy - 4), 2)
 
         for rival in self.rivals:
             if not rival.alive:
@@ -2039,7 +2098,7 @@ class Game:
                 y += 20
 
         if self.curse_timer > 0:
-            screen.blit(font_tiny.render(f"CURSED: controls reversed! {self.curse_timer:0.1f}s", True, self.food_color(FOOD_CURSE)), (x, y))
+            screen.blit(font_tiny.render(f"CURSED: controls reversed! {self.curse_timer:0.1f}s", True, self.downerup_color(DOWNERUP_CURSE)), (x, y))
             y += 20
 
         y += 6
@@ -2067,8 +2126,8 @@ class Game:
         legend = [
             (self.food_color(FOOD_NORMAL), "Food"),
             (self.food_color(FOOD_GOLDEN), "Golden (+50)"),
-            (self.food_color(FOOD_CURSE), "Curse (reversed!)"),
-            (self.food_color(FOOD_BOMB), "Bomb (danger!)"),
+            (self.downerup_color(DOWNERUP_CURSE), "Curse (reversed!)"),
+            (self.downerup_color(DOWNERUP_BOMB), "Bomb (danger!)"),
         ]
         for color, label in legend:
             pygame.draw.circle(screen, color, (x + 6, y + 6), 5)
@@ -2862,9 +2921,14 @@ class Game:
     def _draw_food_icon(self, kind: str, cx: int, cy: int) -> None:
         radius = 7
         pygame.draw.circle(screen, self.food_color(kind), (cx, cy), radius)
-        if kind == FOOD_BOMB:
-            pygame.draw.circle(screen, DANGER, (cx, cy), radius, 2)
-        elif kind == FOOD_CURSE:
+
+    def _draw_downerup_icon(self, kind: str, cx: int, cy: int) -> None:
+        radius = 7
+        pygame.draw.rect(screen, self.downerup_color(kind), (cx - radius, cy - radius, radius * 2, radius * 2),
+                          width=2, border_radius=4)
+        if kind == DOWNERUP_BOMB:
+            pygame.draw.circle(screen, DANGER, (cx, cy), radius - 2, 2)
+        elif kind == DOWNERUP_CURSE:
             pygame.draw.line(screen, (255, 255, 255), (cx - 3, cy - 3), (cx + 3, cy + 3), 2)
             pygame.draw.line(screen, (255, 255, 255), (cx - 3, cy + 3), (cx + 3, cy - 3), 2)
 
@@ -2890,11 +2954,20 @@ class Game:
             (FOOD_GOLDEN, "Golden: +50, grow 1"),
             (FOOD_SPEED, "Speed: +10, 4s speed boost"),
             (FOOD_SHRINK, "Shrink: lose 2 length, -5"),
-            (FOOD_CURSE, "Curse (X): controls reversed 4.5s"),
-            (FOOD_BOMB, "Bomb (ring): instant death unless shielded"),
         ]
         for kind, desc in foods:
             self._draw_food_icon(kind, left_x + 8, y + 8)
+            screen.blit(font_tiny.render(desc, True, TEXT), (left_x + 24, y + 1))
+            y += 22
+
+        y += 14
+        screen.blit(font_small.render("DOWNERUPS", True, ACCENT), (left_x, y)); y += 24
+        downerups = [
+            (DOWNERUP_CURSE, "Curse (X): every move you make, you'll make in reverse, 4.5s"),
+            (DOWNERUP_BOMB, "Bomb (ring): instant death unless shielded"),
+        ]
+        for kind, desc in downerups:
+            self._draw_downerup_icon(kind, left_x + 8, y + 8)
             screen.blit(font_tiny.render(desc, True, TEXT), (left_x + 24, y + 1))
             y += 22
 
@@ -3493,13 +3566,13 @@ class Game:
             # hjkl are vim-style alternates for Player 1's arrows (not WASD,
             # which is already Player 2's local-coop control scheme).
             if key in (pygame.K_UP, pygame.K_k):
-                self.player.set_direction((0, -1))
+                self._p1_set_direction((0, -1))
             elif key in (pygame.K_DOWN, pygame.K_j):
-                self.player.set_direction((0, 1))
+                self._p1_set_direction((0, 1))
             elif key in (pygame.K_LEFT, pygame.K_h):
-                self.player.set_direction((-1, 0))
+                self._p1_set_direction((-1, 0))
             elif key in (pygame.K_RIGHT, pygame.K_l):
-                self.player.set_direction((1, 0))
+                self._p1_set_direction((1, 0))
             elif not is_lan_host and key == pygame.K_w and self.player2:
                 self.player2.set_direction((0, -1))
             elif not is_lan_host and key == pygame.K_s and self.player2:
@@ -3510,13 +3583,13 @@ class Game:
                 self.player2.set_direction((1, 0))
         else:
             if key in (pygame.K_UP, pygame.K_w, pygame.K_k):
-                self.player.set_direction((0, -1))
+                self._p1_set_direction((0, -1))
             elif key in (pygame.K_DOWN, pygame.K_s, pygame.K_j):
-                self.player.set_direction((0, 1))
+                self._p1_set_direction((0, 1))
             elif key in (pygame.K_LEFT, pygame.K_a, pygame.K_h):
-                self.player.set_direction((-1, 0))
+                self._p1_set_direction((-1, 0))
             elif key in (pygame.K_RIGHT, pygame.K_d, pygame.K_l):
-                self.player.set_direction((1, 0))
+                self._p1_set_direction((1, 0))
 
         if key == pygame.K_p:
             self.pause_index = 0
