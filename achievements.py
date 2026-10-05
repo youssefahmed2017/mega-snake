@@ -35,6 +35,42 @@ ACHIEVEMENTS: List[Achievement] = [
     Achievement("ghost_walker", "Ghost Walker", "Pass through a wall using Ghost mode", lambda s: s["wall_phases"] >= 1),
     Achievement("survivor", "Survivor", "Survive 3 minutes in one run", lambda s: s["time_alive"] >= 180, "time_alive", 180),
     Achievement("trespasser", "Trespasser", "Found a place you weren't supposed to be", lambda s: False, hidden=True),
+
+    # --- skill & per-run feats ---
+    Achievement("close_call", "Close Call", "Scrape past a wall or tail and live", lambda s: s.get("near_misses", 0) >= 1),
+    Achievement("edge_lord", "Edge Lord", "Get 10 near misses in one run", lambda s: s.get("near_misses", 0) >= 10, "near_misses", 10),
+    Achievement("golden_trio", "Golden Trio", "Eat 3 golden apples in one run", lambda s: s["golden_eaten"] >= 3, "golden_eaten", 3),
+    Achievement("fully_charged", "Fully Charged", "Pick up 5 power-ups in one run", lambda s: s["powerups_collected"] >= 5, "powerups_collected", 5),
+    Achievement("portal_hopper", "Portal Hopper", "Travel through 3 portals in one run", lambda s: s["portals_used"] >= 3, "portals_used", 3),
+    Achievement("bomb_squad", "Bomb Squad", "Survive 3 bombs in one run", lambda s: s["bombs_survived"] >= 3, "bombs_survived", 3),
+    Achievement("poltergeist", "Poltergeist", "Phase through walls 5 times in one run", lambda s: s["wall_phases"] >= 5, "wall_phases", 5),
+    Achievement("maxed_out", "Maxed Out", "Reach a 20x combo", lambda s: s["combo"] >= 20, "combo", 20),
+    Achievement("longer_boi", "Longer Boi", "Reach length 50", lambda s: s["length"] >= 50, "length", 50),
+    Achievement("legend", "Legend", "Score 1000 points", lambda s: s["score"] >= 1000, "score", 1000),
+    Achievement("marathon", "Marathon", "Survive 5 minutes in one run", lambda s: s["time_alive"] >= 300, "time_alive", 300),
+
+    # --- mode specialists ---
+    Achievement("maze_runner", "Maze Runner", "Score 100 in Maze mode", lambda s: s.get("mode") == "Maze" and s["score"] >= 100),
+    Achievement("wall_crawler", "Wall Crawler", "Score 100 in Walls mode", lambda s: s.get("mode") == "Walls" and s["score"] >= 100),
+    Achievement("battle_hardened", "Battle Hardened", "Score 80 in Battle mode", lambda s: s.get("mode") == "Battle" and s["score"] >= 80),
+    Achievement("beat_the_clock", "Beat the Clock", "Score 150 in Timed mode", lambda s: s.get("mode") == "Timed" and s["score"] >= 150),
+    Achievement("hardcore_100", "No Safety Net", "Score 100 in Hardcore mode", lambda s: s.get("mode") == "Hardcore" and s["score"] >= 100),
+    Achievement("daily_driver", "Daily Driver", "Score 50 in a Daily run", lambda s: s.get("mode") == "Daily" and s["score"] >= 50),
+
+    # --- long-term progress ---
+    Achievement("regular", "Regular", "Play 10 games", lambda s: s.get("lifetime_games", 0) >= 10, "lifetime_games", 10),
+    Achievement("veteran", "Veteran", "Play 50 games", lambda s: s.get("lifetime_games", 0) >= 50, "lifetime_games", 50),
+    Achievement("food_hoarder", "Food Hoarder", "Eat 250 food in total", lambda s: s.get("lifetime_food", 0) >= 250, "lifetime_food", 250),
+    Achievement("bottomless", "Bottomless Pit", "Eat 1000 food in total", lambda s: s.get("lifetime_food", 0) >= 1000, "lifetime_food", 1000),
+    Achievement("on_a_roll", "On a Roll", "Play 3 days in a row", lambda s: s.get("streak", 0) >= 3, "streak", 3),
+    Achievement("dedicated", "Dedicated", "Play 7 days in a row", lambda s: s.get("streak", 0) >= 7, "streak", 7),
+    Achievement("quest_clear", "Quest Clear", "Finish all daily quests in one day", lambda s: s.get("quests_today", 0) >= 3, "quests_today", 3),
+
+    # --- shop & settings (unlocked directly by game events) ---
+    Achievement("tinkerer", "Tinkerer", "Change a setting", lambda s: False),
+    Achievement("fashionista", "Fashionista", "Buy a trail in the shop", lambda s: False),
+    Achievement("collector", "Collector", "Own every shop trail", lambda s: False),
+    Achievement("record_breaker", "Record Breaker", "Beat your personal best in any mode", lambda s: False),
 ]
 
 ACHIEVEMENTS_BY_ID: Dict[str, Achievement] = {a.id: a for a in ACHIEVEMENTS}

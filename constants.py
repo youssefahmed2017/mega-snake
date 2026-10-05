@@ -4,7 +4,10 @@ CELL_SIZE = 24
 GRID_W, GRID_H = 32, 22
 SIDEBAR_W = 260
 SCREEN_W = GRID_W * CELL_SIZE + SIDEBAR_W
-SCREEN_H = GRID_H * CELL_SIZE
+# 16:9, so a 1920x1080 display is filled exactly (no letterbox bars). The 528px board sits
+# vertically centred in it; BOARD_Y is how far down.
+SCREEN_H = 578
+BOARD_Y = (SCREEN_H - GRID_H * CELL_SIZE) // 2
 FPS = 60
 
 BASE_MOVE_INTERVAL = 0.12  # seconds per grid step at speed 1.0

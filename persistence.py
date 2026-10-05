@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from constants import SAVE_DIR_NAME
+from settings_defs import SETTING_DEFAULTS
 
 SAVE_DIR = Path.home() / SAVE_DIR_NAME
 SAVE_FILE = SAVE_DIR / "save.json"
@@ -28,12 +29,7 @@ DEFAULT_DATA = {
     "equipped_trail": "None",
     "streak": {"count": 0, "last_played": None},
     "quests": {"date": None, "completed": []},  # today's completed quest ids
-    "settings": {
-        "volume": 100,
-        "difficulty": "Normal",
-        "screen_shake": True,
-        "colorblind": False,
-    },
+    "settings": dict(SETTING_DEFAULTS),
 }
 
 

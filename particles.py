@@ -7,6 +7,8 @@ from typing import List, Tuple
 
 import pygame
 
+import gfx
+
 
 @dataclass
 class Particle:
@@ -32,9 +34,9 @@ class Particle:
         if r <= 0:
             return
         color = self.color
-        s = pygame.Surface((r * 2, r * 2), pygame.SRCALPHA)
+        s = gfx.surface((r * 2, r * 2), pygame.SRCALPHA)
         alpha = int(255 * t)
-        pygame.draw.circle(s, (*color, alpha), (r, r), r)
+        gfx.draw.circle(s, (*color, alpha), (r, r), r)
         surf.blit(s, (self.x - r, self.y - r))
 
 
@@ -44,9 +46,10 @@ class ParticleSystem:
         self.shake_time = 0.0
         self.shake_duration = 0.0
         self.shake_mag = 0.0
+        self.density = 1.0  # user setting: scales how many particles each burst spawns
 
     def burst(self, x: float, y: float, color: Tuple[int, int, int], count: int = 14, speed: float = 140, life: float = 0.5) -> None:
-        for _ in range(count):
+        for _ in range(round(count * self.density)):
             angle = random.uniform(0, 6.283)
             spd = random.uniform(speed * 0.3, speed)
             self.particles.append(

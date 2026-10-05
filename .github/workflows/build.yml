@@ -15,15 +15,15 @@ jobs:
           - os: windows-latest
             artifact_name: MegaSnake-Windows
             output_path: dist/MegaSnake.exe
-            pyinstaller_args: --onefile --windowed
+            pyinstaller_args: --onefile --windowed --add-data "assets/fonts;assets/fonts" --add-data "assets/art;assets/art"
           - os: macos-latest
             artifact_name: MegaSnake-macOS
             output_path: dist/MegaSnake.app.zip
-            pyinstaller_args: --windowed
+            pyinstaller_args: --windowed --add-data "assets/fonts:assets/fonts" --add-data "assets/art:assets/art"
           - os: ubuntu-latest
             artifact_name: MegaSnake-Linux
             output_path: dist/MegaSnake
-            pyinstaller_args: --onefile
+            pyinstaller_args: --onefile --add-data "assets/fonts:assets/fonts" --add-data "assets/art:assets/art"
 
     runs-on: ${{ matrix.os }}
 
