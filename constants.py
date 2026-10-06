@@ -383,7 +383,7 @@ GAME_VERSION = "3.1.0"
 # Oldest version that may play multiplayer with this one. Different versions inside the
 # range play together; anything older is turned away. Raise it only when the network
 # protocol changes in a way old builds can't follow, and mirror it in server/src/index.js.
-MIN_MULTIPLAYER_VERSION = "3.0.0"
+MIN_MULTIPLAYER_VERSION = "1.9.2"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker),
 # deployed 2026-10-01 to a free *.workers.dev subdomain. The MEGASNAKE_SERVER

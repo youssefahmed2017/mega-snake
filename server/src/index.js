@@ -30,7 +30,7 @@ import { DurableObject } from "cloudflare:workers";
 
 // Oldest game version allowed to host or join. Keep in sync with MIN_MULTIPLAYER_VERSION in
 // constants.py, and raise both only when the wire protocol changes in a way old builds can't follow.
-const MIN_VERSION = "3.0.0";
+const MIN_VERSION = "1.9.2";
 
 function versionTuple(v) {
   const nums = String(v || "").replace(/^v/i, "").split("-")[0].split(".").map((p) => parseInt(p, 10) || 0);
