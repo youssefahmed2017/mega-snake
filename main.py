@@ -4758,6 +4758,7 @@ class Game:
         ("Enter / Esc: back", "A / B: back"),
         ("Esc / right-click: back", "B: back"),
         ("Right-click: back", "B: back"),
+        ("Click, drag or scroll to change   Tab: next tab   F11: fullscreen", "Left / Right: change   LB / RB: switch tab"),
         ("Esc: back", "B: back"),
         ("Right-click or P to resume   Esc menu", "Start or B: resume   Select: menu"),
         ("M mute  |  Esc menu", "Start: pause"),
@@ -4818,6 +4819,10 @@ class Game:
             }.get(event.button)
             if key is not None:
                 self._pad_press(key)
+            elif (event.button in (pygame.CONTROLLER_BUTTON_LEFTSHOULDER, pygame.CONTROLLER_BUTTON_RIGHTSHOULDER)
+                  and self.state == STATE_SETTINGS):
+                self._set_settings_tab(self.settings_tab + (-1 if event.button == pygame.CONTROLLER_BUTTON_LEFTSHOULDER else 1))
+                self.pad_active = True
             elif event.button == pygame.CONTROLLER_BUTTON_BACK and self.state == STATE_PAUSED:
                 self._press(pygame.K_ESCAPE)  # Select leaves the run from Paused; B only resumes
                 self.pad_active = True
