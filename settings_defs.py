@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple
 
-SETTING_TABS = ["Audio", "Gameplay", "Display"]
+SETTING_TABS = ["Audio", "Gameplay", "Display", "Controller"]
 
 
 @dataclass(frozen=True)
@@ -56,8 +56,17 @@ SETTING_DEFS: List[SettingDef] = [
     SettingDef("grid_lines", "Grid Lines", "Display", "toggle", False, hint="Faint cell lines over the checkered floor."),
     SettingDef("colorblind", "Color Blind Mode", "Display", "toggle", False),
     SettingDef("show_fps", "Show FPS", "Display", "toggle", False),
+    # Controller
+    SettingDef("controller_enabled", "Controller Input", "Controller", "toggle", True,
+               hint="Turn off to ignore gamepads completely."),
+    SettingDef("stick_sensitivity", "Stick Sensitivity", "Controller", "choice", "Normal",
+               options=("Low", "Normal", "High"), hint="How far you push the left stick before it counts as a turn."),
+    SettingDef("rumble", "Vibration", "Controller", "toggle", True,
+               hint="Buzz when you eat and when you die. Only while playing with the pad."),
+    SettingDef("rumble_strength", "Vibration Strength", "Controller", "slider", 100, lo=25, hi=100, step=25),
 ]
 
 SETTING_BY_KEY: Dict[str, SettingDef] = {d.key: d for d in SETTING_DEFS}
 SETTING_DEFAULTS: Dict[str, Any] = {d.key: d.default for d in SETTING_DEFS}
+STICK_ENGAGE = {"Low": 24000, "Normal": 18000, "High": 12000}  # axis value (of 32767) that registers a turn
 PARTICLE_DENSITY = {"Off": 0.0, "Low": 0.45, "Full": 1.0}

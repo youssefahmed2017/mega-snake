@@ -58,7 +58,8 @@ import gfx
 import ui
 from art import Art
 from ui import Hot
-from settings_defs import SETTING_DEFS, SETTING_BY_KEY, SETTING_TABS, SETTING_DEFAULTS, PARTICLE_DENSITY, SettingDef
+from settings_defs import (SETTING_DEFS, SETTING_BY_KEY, SETTING_TABS, SETTING_DEFAULTS, PARTICLE_DENSITY,
+                           STICK_ENGAGE, SettingDef)
 
 os.environ.setdefault("SDL_RENDER_SCALE_QUALITY", "linear")  # smooth, not blocky, when the OS upscales
 pygame.init()
@@ -445,6 +446,17 @@ class Game:
 
     def _center(self, cell: Tuple[int, int]) -> Tuple[float, float]:
         return cell[0] + 0.5, cell[1] + 0.5
+
+    def _rumble(self, low: float, high: float, ms: int) -> None:
+        """Vibrate connected pads (low = heavy motor, high = light). Only while a pad is the active input."""
+        if not (self.pad_active and self.settings["rumble"]):
+            return
+        k = int(self.settings["rumble_strength"]) / 100
+        for c in self._pads.values():
+            try:
+                c.rumble(low * k, high * k, ms)
+            except pygame.error:
+                pass
 
     def shake(self, duration: float, magnitude: float) -> None:
         if self.screen_shake_enabled:
@@ -1715,6 +1727,7 @@ class Game:
                     ppx, ppy = grid_to_px(*self._center(snake.head))
                     self.particles.burst(ppx, ppy, (120, 255, 190), count=20)
                     self.shake(0.2, 4)
+                    self._rumble(0.5, 0.6, 200)
                     self._announce("CLUTCH SAVE!", GREEN)
                 else:
                     self._kill_snake(tag, reason)
@@ -1836,6 +1849,7 @@ class Game:
             self.score_breakdown["mult_bonus"] += gained - base
             self.stats["food_eaten"] += 1
             self.sounds.play(self.sounds.eat_sound(self.combo))
+            self._rumble(0.0, 0.3, 70)
             self.particles.burst(px, py, self.food_color(FOOD_NORMAL), count=10)
             self._spawn_score_popup(px, py, f"+{gained}", self.food_color(FOOD_NORMAL))
 
@@ -1850,6 +1864,7 @@ class Game:
             self.stats["food_eaten"] += 1
             self.stats["golden_eaten"] += 1
             self.sounds.play(self.sounds.golden)
+            self._rumble(0.25, 0.7, 160)
             self.particles.burst(px, py, self.food_color(FOOD_GOLDEN), count=24, speed=200)
             self._spawn_score_popup(px, py, f"+{gained}", self.food_color(FOOD_GOLDEN), big=True)
             if self.combo >= 3:
@@ -1865,6 +1880,7 @@ class Game:
             self.score_breakdown["mult_bonus"] += gained - 10
             self.stats["food_eaten"] += 1
             self.sounds.play(self.sounds.eat)
+            self._rumble(0.0, 0.3, 70)
             self.particles.burst(px, py, self.food_color(FOOD_SPEED), count=14)
             self._spawn_score_popup(px, py, f"+{gained}", self.food_color(FOOD_SPEED))
 
@@ -1916,6 +1932,7 @@ class Game:
             color = (255, 255, 255) if i == 0 else SNAKE_SKINS[SKIN_NAMES[self.skin_idx]][1]
             self.pending_death_bursts.append([i * 0.035, px, py, color])
         self.shake(0.4, 7)
+        self._rumble(1.0, 0.8, 450)
         self.sounds.play(self.sounds.death)
 
         self.players_alive[PTAGS.index(tag)] = False
@@ -4787,6 +4804,8 @@ class Game:
             self._stick_dir = dict.fromkeys(self._stick_dir, 0)
             if self.state == STATE_PLAYING and self.lan_role is None and not self._pads:
                 self._press(pygame.K_p)  # pad unplugged mid-run: pause rather than crash into a wall
+        elif not self.settings["controller_enabled"]:
+            return
         elif t == pygame.CONTROLLERBUTTONDOWN:
             key = {
                 pygame.CONTROLLER_BUTTON_DPAD_UP: pygame.K_UP,
@@ -4805,8 +4824,12 @@ class Game:
         elif t == pygame.CONTROLLERAXISMOTION and event.axis in self._stick_dir:
             v = event.value
             cur = self._stick_dir[event.axis]
-            # Hysteresis: engage past 55% travel, release under 30%, so a wobbly stick doesn't spam.
-            new = (1 if v > 18000 else -1 if v < -18000 else 0) if cur == 0 else (cur if abs(v) > 10000 and (v > 0) == (cur > 0) else 0)
+            # Hysteresis: release well below the engage point so a wobbly stick doesn't spam.
+            engage = STICK_ENGAGE[self.settings["stick_sensitivity"]]
+            if cur == 0:
+                new = 1 if v > engage else -1 if v < -engage else 0
+            else:
+                new = cur if abs(v) > engage * 0.55 and (v > 0) == (cur > 0) else 0
             if new != cur:
                 self._stick_dir[event.axis] = new
                 if new:

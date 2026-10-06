@@ -90,7 +90,9 @@ pads agree) events are routed by `handle_event` to `_handle_controller`, which t
 into `_press(K_*)` through `_pad_press`. Pads must stay open in `Game._pads` or SDL stops delivering events.
 B never leaves Playing/abandons a run (it resumes from Paused; Select quits to menu from Paused). Footer hint
 strings go through `Game._hint()`, which swaps key names for pad buttons (`PAD_HINTS`) while `pad_active` is set —
-route new footer text through it. To test without hardware:
+route new footer text through it. Settings > Controller (enable, stick sensitivity via `STICK_ENGAGE`, vibration)
+is declared in `settings_defs.py`; `Game._rumble(low, high, ms)` vibrates pads (only while `pad_active`) and is
+called from the eat/death/shield-save sites. To test without hardware:
 `pip install evdev && sudo chmod a+rw /dev/uinput && python tools/virtual_pad.py` (dev-only fake Xbox 360 pad).
 
 Achievements: stat-based ones are checked every frame against `Game._achievement_stats()` (run stats plus
