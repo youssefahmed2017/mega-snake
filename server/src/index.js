@@ -11,7 +11,7 @@
 // what. A guest doesn't need to know who else is in the room to do its job,
 // so it just ignores the stamp on messages that don't need one.
 //
-// Routes (all WebSocket upgrades; `v` = the game version, which must match):
+// Routes (all WebSocket upgrades; `v` = the game version, which must be >= MIN_VERSION):
 //   /host?v=1.9.0                            create a room, become its host
 //   /join/ABCDE?v=1.9.0                      join room ABCDE as a guest
 //   /rejoin/ABCDE?role=host|p2|p3|p4&token=...&v=...   reclaim your seat
@@ -24,9 +24,27 @@
 //   _peer_lost {slot}          that slot's connection dropped
 //   _peer_back {slot}          that slot reconnected
 //   _peer_gone {slot}          that slot never came back - they're out for good
-//   _error {msg}               request refused (bad code, room full, version mismatch, ...)
+//   _error {msg}               request refused (bad code, room full, game too old, ...)
 
 import { DurableObject } from "cloudflare:workers";
+
+// Oldest game version allowed to host or join. Keep in sync with MIN_MULTIPLAYER_VERSION in
+// constants.py, and raise both only when the wire protocol changes in a way old builds can't follow.
+const MIN_VERSION = "3.0.0";
+
+function versionTuple(v) {
+  const nums = String(v || "").replace(/^v/i, "").split("-")[0].split(".").map((p) => parseInt(p, 10) || 0);
+  while (nums.length < 3) nums.push(0);
+  return nums.slice(0, 3);
+}
+
+function tooOld(v) {
+  const a = versionTuple(v), b = versionTuple(MIN_VERSION);
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
+  return false;
+}
+
+const tooOldMsg = (v) => `Your game (v${v || "?"}) is too old for online play. Update to v${MIN_VERSION} or newer.`;
 
 const CODE_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O or 1/I lookalikes
 const CODE_LEN = 5;
@@ -97,6 +115,7 @@ export class Room extends DurableObject {
     let room = await this.ctx.storage.get("room");
 
     if (action === "host") {
+      if (tooOld(v)) return this.reject(tooOldMsg(v));
       if (room) return new Response("Code taken.", { status: 409 });
       room = { code, version: v, tokens: { host: crypto.randomUUID() }, guests: {}, lost: {} };
       await this.ctx.storage.put("room", room);
@@ -106,9 +125,7 @@ export class Room extends DurableObject {
 
     if (action === "join") {
       if (!room) return this.reject("Room not found. Check the code and try again.");
-      if (room.version !== v) {
-        return this.reject(`Version mismatch: host has v${room.version}, you have v${v}. Update to the same version.`);
-      }
+      if (tooOld(v)) return this.reject(tooOldMsg(v));
       const slot = GUEST_SLOTS.find((s) => !room.guests[s]);
       if (!slot) return this.reject("That room is already full.");
       const token = crypto.randomUUID();

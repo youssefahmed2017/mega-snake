@@ -43,10 +43,12 @@ modules (`snake.py`, `food.py`, `enemy.py`, `particles.py`, `achievements.py`, `
 `audio.py`, `celebrate.py`, `constants.py`, `tls.py`, `updater.py`) are plain support modules imported by
 `main.py` — there's no separate engine/view split.
 
-`GAME_VERSION` in `constants.py` is the single source of truth for compatibility checks (LAN handshake,
-online relay `?v=` query param, and the auto-updater's release comparison). Bump it whenever the wire protocol
-with `network.py` or `server/src/index.js` changes, and keep all three in sync — a version mismatch is a hard
-disconnect, by design (see `network.py`'s `hello`/version check and the relay's `_error` on mismatch).
+`GAME_VERSION` in `constants.py` is the app's version (title screen, auto-updater's release comparison, online
+`?v=` query param). Multiplayer compatibility is a *range*, not an exact match: `MIN_MULTIPLAYER_VERSION` (also
+`MIN_VERSION` in `server/src/index.js` — keep the two in sync) is the oldest build allowed to host/join, and the
+LAN host (`_lan_host_poll`) and the relay turn away anything older. Builds inside the range play together, so
+a failed auto-update doesn't lock anyone out. Raise the minimum only when the `network.py`/relay wire protocol
+changes in a way old builds can't follow, and redeploy the relay (`npm run deploy`) when you do.
 
 ### Rendering and resolution — `gfx.py`
 All layout code is in *logical* units (the 1028x578 canvas); never use raw `pygame.draw`, `pygame.Surface(...)`,

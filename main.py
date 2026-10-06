@@ -37,7 +37,7 @@ from constants import (
     POWERUP_GHOST, POWERUP_MAGNET, POWERUP_SHIELD, POWERUP_SLOWMO, POWERUP_MULT,
     POWERUP_FREEZE, POWERUP_TELEPORT, POWERUP_REVIVE, POWERUP_COLORS, POWERUP_DURATIONS, CURSE_DURATION,
     PORTAL_A, PORTAL_B, MODES, MODE_CONFIG, MODE_DESC, DIFFICULTIES, DIFFICULTY_SPEED_MULT,
-    GAME_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
+    GAME_VERSION, MIN_MULTIPLAYER_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
     LAN_RULESETS, LAN_RULESET_NAMES, MAPS, MAP_NAMES, MAP_THEMES, DEFAULT_THEME,
     EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS, ONLINE_SERVER_URL,
 )
@@ -933,7 +933,7 @@ class Game:
         press Enter to start (see handle_lan_host_wait_key). A guest's
         version is checked here (LAN only - Online's relay already gated it
         before the connection even completed) by watching for each new
-        slot's first message; a mismatch gets that one slot disconnected
+        slot's first message; one below MIN_MULTIPLAYER_VERSION gets that one slot disconnected
         without affecting anyone else already waiting."""
         if not self.lan_host:
             return
@@ -965,10 +965,12 @@ class Game:
                 continue  # no in-band version check needed; the relay already gated it
             if msg.get("type") == "hello" and sender in self.lan_unverified:
                 their_version = str(msg.get("version") or "")
-                if their_version and their_version != GAME_VERSION:
+                if their_version and (updater.parse_version(their_version)
+                                      < updater.parse_version(MIN_MULTIPLAYER_VERSION)):
                     self.lan_host.close_slot(sender)
                     self.lan_toast = (
-                        f"A player on v{their_version} tried to join (need v{GAME_VERSION}) - disconnected."
+                        f"A player on v{their_version} tried to join (need v{MIN_MULTIPLAYER_VERSION} "
+                        f"or newer) - disconnected."
                     )
                     self.lan_toast_until = now + 4.0
                 del self.lan_unverified[sender]
