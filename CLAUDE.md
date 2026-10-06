@@ -49,7 +49,7 @@ with `network.py` or `server/src/index.js` changes, and keep all three in sync �
 disconnect, by design (see `network.py`'s `hello`/version check and the relay's `_error` on mismatch).
 
 ### Rendering and resolution — `gfx.py`
-All layout code is in *logical* units (the 1028x528 canvas); never use raw `pygame.draw`, `pygame.Surface(...)`,
+All layout code is in *logical* units (the 1028x578 canvas); never use raw `pygame.draw`, `pygame.Surface(...)`,
 `pygame.font.Font` or `pygame.mouse.get_pos()` in game/UI code. Use `gfx.draw.*`, `gfx.surface()`, `gfx.Font`
 and `gfx.mouse_pos()` (and `event.pos` -> `gfx.to_logical`), which scale to the real pixel resolution picked in
 Settings > Display (144p..4K, `RESOLUTIONS` in `main.py`; `apply_display()` rebuilds window, canvas and fonts).
@@ -77,13 +77,19 @@ top of them rather than replacing them. Every `draw_*` registers `Hot` regions (
 row and replays the same key via `_press(K_RETURN/K_LEFT/...)`, so keyboard and mouse can't drift apart —
 when adding a screen, draw its rows through those helpers instead of writing a new click handler. Right-click
 is Esc everywhere except Playing/Paused, where it pauses/resumes (Esc there would abandon the run).
-The window uses `pygame.SCALED | RESIZABLE`, so mouse coords are already in logical 1028x528 space.
+The window uses `pygame.SCALED | RESIZABLE`, so mouse coords are already in logical 1028x578 space.
 
 User settings are declared once in `settings_defs.SETTING_DEFS` (the Settings screen, tabs, and
 `persistence` defaults are generated from it). Read/write them via `Game.setting_get/setting_set`: five
 legacy ones (volume, muted, difficulty, screen_shake, colorblind) live as attributes elsewhere in the game,
 the rest in `self.settings`. The snake is deliberately keyboard-only: `_handle_mouse` ignores everything while
 `STATE_PLAYING`, and the mouse is for menus/settings only. Don't add mouse steering.
+
+Gamepads use the same replay-a-key trick: `pygame._sdl2.controller` (SDL's normalized mapping, so Sony/Xbox
+pads agree) events are routed by `handle_event` to `_handle_controller`, which turns D-pad/left stick/A/B/Start
+into `_press(K_*)` through `_pad_press`. Pads must stay open in `Game._pads` or SDL stops delivering events.
+B never leaves Playing/abandons a run (it resumes from Paused). To test without hardware:
+`pip install evdev && sudo chmod a+rw /dev/uinput && python tools/virtual_pad.py` (dev-only fake Xbox 360 pad).
 
 Achievements: stat-based ones are checked every frame against `Game._achievement_stats()` (run stats plus
 mode/lifetime totals) and again in `_finalize_game_over`; event-based ones (`lambda s: False`) are granted
@@ -129,4 +135,3 @@ expire and require auth, so they can't serve that role. When cutting a release, 
 
 A separate, ungitted static site (Vercel-deployed, `index.html` + `.vercel/`) one directory up from this repo
 — the project's landing page. Not part of this repository.
-cl

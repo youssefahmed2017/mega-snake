@@ -62,6 +62,8 @@ from settings_defs import SETTING_DEFS, SETTING_BY_KEY, SETTING_TABS, SETTING_DE
 
 os.environ.setdefault("SDL_RENDER_SCALE_QUALITY", "linear")  # smooth, not blocky, when the OS upscales
 pygame.init()
+from pygame._sdl2 import controller as sdl_controller
+sdl_controller.init()
 pygame.display.set_caption("MEGA SNAKE")
 clock = pygame.time.Clock()
 
@@ -280,6 +282,10 @@ class Game:
         self.tracker = AchievementTracker(self.data.get("achievements", []))
         self.sounds = SoundBank()
         self.particles = ParticleSystem()
+        self._pads: dict = {}  # device index -> open sdl_controller.Controller (must stay open to get events)
+        self._stick_dir = {pygame.CONTROLLER_AXIS_LEFTX: 0, pygame.CONTROLLER_AXIS_LEFTY: 0}
+        for i in range(sdl_controller.get_count()):
+            self._open_pad(i)
 
         settings = self.data["settings"]
         self.settings: Dict[str, object] = dict(SETTING_DEFAULTS)
@@ -4730,7 +4736,69 @@ class Game:
         self.cursor.update(pos)
         self.cursor.draw(screen, skin[0], skin[1], excited)
 
+    def _open_pad(self, index: int) -> None:
+        if index in self._pads or not sdl_controller.is_controller(index):
+            return
+        try:
+            self._pads[index] = sdl_controller.Controller(index)
+        except pygame.error:
+            pass
+
+    def _pad_press(self, key: int) -> None:
+        """Controller input replays keys, like the mouse layer: Start pauses/resumes, B backs
+        out (but never abandons a run from Playing), and Playing only accepts steering."""
+        st = self.state
+        if key == pygame.K_ESCAPE:
+            if st == STATE_PLAYING or st == STATE_MENU:
+                return
+            if st == STATE_PAUSED:
+                key = pygame.K_p
+        elif key == pygame.K_p:
+            if st not in (STATE_PLAYING, STATE_PAUSED) or self.lan_role == "client":
+                key = pygame.K_RETURN
+        elif key == pygame.K_RETURN and st == STATE_PLAYING:
+            return
+        self._press(key)
+
+    def _handle_controller(self, event: pygame.event.Event) -> None:
+        t = event.type
+        if t == pygame.CONTROLLERDEVICEADDED:
+            self._open_pad(event.device_index)
+        elif t == pygame.CONTROLLERDEVICEREMOVED:
+            self._pads = {i: c for i, c in self._pads.items() if c.attached()}
+            self._stick_dir = dict.fromkeys(self._stick_dir, 0)
+            if self.state == STATE_PLAYING and self.lan_role is None and not self._pads:
+                self._press(pygame.K_p)  # pad unplugged mid-run: pause rather than crash into a wall
+        elif t == pygame.CONTROLLERBUTTONDOWN:
+            key = {
+                pygame.CONTROLLER_BUTTON_DPAD_UP: pygame.K_UP,
+                pygame.CONTROLLER_BUTTON_DPAD_DOWN: pygame.K_DOWN,
+                pygame.CONTROLLER_BUTTON_DPAD_LEFT: pygame.K_LEFT,
+                pygame.CONTROLLER_BUTTON_DPAD_RIGHT: pygame.K_RIGHT,
+                pygame.CONTROLLER_BUTTON_A: pygame.K_RETURN,
+                pygame.CONTROLLER_BUTTON_B: pygame.K_ESCAPE,
+                pygame.CONTROLLER_BUTTON_START: pygame.K_p,
+            }.get(event.button)
+            if key is not None:
+                self._pad_press(key)
+        elif t == pygame.CONTROLLERAXISMOTION and event.axis in self._stick_dir:
+            v = event.value
+            cur = self._stick_dir[event.axis]
+            # Hysteresis: engage past 55% travel, release under 30%, so a wobbly stick doesn't spam.
+            new = (1 if v > 18000 else -1 if v < -18000 else 0) if cur == 0 else (cur if abs(v) > 10000 and (v > 0) == (cur > 0) else 0)
+            if new != cur:
+                self._stick_dir[event.axis] = new
+                if new:
+                    horiz = event.axis == pygame.CONTROLLER_AXIS_LEFTX
+                    self._pad_press((pygame.K_RIGHT if new > 0 else pygame.K_LEFT) if horiz
+                                    else (pygame.K_DOWN if new > 0 else pygame.K_UP))
+
     def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type in (pygame.CONTROLLERDEVICEADDED, pygame.CONTROLLERDEVICEREMOVED,
+                          pygame.CONTROLLERBUTTONDOWN, pygame.CONTROLLERAXISMOTION):
+            if not self.chat_active:
+                self._handle_controller(event)
+            return
         if event.type in (pygame.MOUSEMOTION, pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP, pygame.MOUSEWHEEL):
             if not self.chat_active:
                 self._handle_mouse(event)
