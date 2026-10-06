@@ -378,7 +378,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "3.0.0"
+GAME_VERSION = "3.1.0"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker),
 # deployed 2026-10-01 to a free *.workers.dev subdomain. The MEGASNAKE_SERVER
