@@ -88,7 +88,9 @@ the rest in `self.settings`. The snake is deliberately keyboard-only: `_handle_m
 Gamepads use the same replay-a-key trick: `pygame._sdl2.controller` (SDL's normalized mapping, so Sony/Xbox
 pads agree) events are routed by `handle_event` to `_handle_controller`, which turns D-pad/left stick/A/B/Start
 into `_press(K_*)` through `_pad_press`. Pads must stay open in `Game._pads` or SDL stops delivering events.
-B never leaves Playing/abandons a run (it resumes from Paused). To test without hardware:
+B never leaves Playing/abandons a run (it resumes from Paused; Select quits to menu from Paused). Footer hint
+strings go through `Game._hint()`, which swaps key names for pad buttons (`PAD_HINTS`) while `pad_active` is set —
+route new footer text through it. To test without hardware:
 `pip install evdev && sudo chmod a+rw /dev/uinput && python tools/virtual_pad.py` (dev-only fake Xbox 360 pad).
 
 Achievements: stat-based ones are checked every frame against `Game._achievement_stats()` (run stats plus

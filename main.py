@@ -282,6 +282,7 @@ class Game:
         self.tracker = AchievementTracker(self.data.get("achievements", []))
         self.sounds = SoundBank()
         self.particles = ParticleSystem()
+        self.pad_active = False  # last real input came from a pad (drives footer hints)
         self._pads: dict = {}  # device index -> open sdl_controller.Controller (must stay open to get events)
         self._stick_dir = {pygame.CONTROLLER_AXIS_LEFTX: 0, pygame.CONTROLLER_AXIS_LEFTY: 0}
         for i in range(sdl_controller.get_count()):
@@ -2674,7 +2675,7 @@ class Game:
         if self.lan_role:
             y -= 16
         screen.blit(font_tiny.render("Arrows/WASD/hjkl  |  P pause", True, TEXT_DIM), (x, y)); y += 16
-        screen.blit(font_tiny.render("M mute  |  Esc menu", True, TEXT_DIM), (x, y)); y += 16
+        screen.blit(font_tiny.render(self._hint("M mute  |  Esc menu"), True, TEXT_DIM), (x, y)); y += 16
         if self.lan_role:
             hint_color = GOLD if self.chat_unread else TEXT_DIM
             screen.blit(font_tiny.render(self._chat_hint(), True, hint_color), (x, y)); y += 16
@@ -2842,7 +2843,7 @@ class Game:
             note = font_tiny.render("Your friend also sees PAUSED while you're here.", True, TEXT_DIM)
             screen.blit(note, (SCREEN_W // 2 - note.get_width() // 2, SCREEN_H // 2 - 50 + len(items) * 40 + 6))
 
-        s = font_tiny.render(f"Click to choose   Right-click or P to resume   Esc menu   {self._chat_hint()}", True, TEXT_DIM)
+        s = font_tiny.render(self._hint(f"Click to choose   Right-click or P to resume   Esc menu   {self._chat_hint()}"), True, TEXT_DIM)
         screen.blit(s, (SCREEN_W // 2 - s.get_width() // 2, SCREEN_H // 2 + 130))
 
         if self.chat_active:
@@ -3009,7 +3010,7 @@ class Game:
             text = font_small.render(line, True, color)
             screen.blit(text, (SCREEN_W // 2 - 190, y))
             y += 26
-        foot = font_small.render("Esc: back", True, TEXT_DIM)
+        foot = font_small.render(self._hint("Esc: back"), True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 40))
 
     def draw_enter_initials(self) -> None:
@@ -3161,7 +3162,7 @@ class Game:
         pct = int(100 * len(unlocked) / len(ACHIEVEMENTS))
         foot = font_small.render(f"{len(unlocked)}/{len(ACHIEVEMENTS)} unlocked ({pct}%)", True, ACCENT)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 34))
-        hint = font_tiny.render("Scroll or drag the bar   Right-click: back", True, TEXT_DIM)
+        hint = font_tiny.render(self._hint("Scroll or drag the bar   Right-click: back"), True, TEXT_DIM)
         screen.blit(hint, (SCREEN_W - hint.get_width() - 20, SCREEN_H - 30))
 
     def draw_shop(self) -> None:
@@ -3534,7 +3535,7 @@ class Game:
         screen.blit(msg_r, (SCREEN_W // 2 - msg_r.get_width() // 2, 220))
         self._button(pygame.Rect(SCREEN_W // 2 - 90, SCREEN_H - 90, 180, 38), "OK",
                      lambda: self._press(pygame.K_RETURN), primary=True, font=font_small)
-        foot = font_small.render("Enter / Esc: back", True, TEXT_DIM)
+        foot = font_small.render(self._hint("Enter / Esc: back"), True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 40))
 
     def _settings_rows(self) -> List[SettingDef]:
@@ -3611,7 +3612,7 @@ class Game:
         if hint:
             h = font_small.render(hint, True, TEXT_DIM)
             screen.blit(h, (SCREEN_W // 2 - h.get_width() // 2, SCREEN_H - 58))
-        foot = font_tiny.render("Click, drag or scroll to change   Tab: next tab   F11: fullscreen   Esc / right-click: back",
+        foot = font_tiny.render(self._hint("Click, drag or scroll to change   Tab: next tab   F11: fullscreen   Esc / right-click: back"),
                                 True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 28))
 
@@ -3655,7 +3656,7 @@ class Game:
 
         self._draw_run_history_chart(530, 100, 430, 220)
 
-        foot = font_small.render("Esc: back", True, TEXT_DIM)
+        foot = font_small.render(self._hint("Esc: back"), True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
 
     def _draw_run_history_chart(self, x: int, y: int, w: int, h: int) -> None:
@@ -3718,7 +3719,7 @@ class Game:
                 screen.blit(font_tiny.render(f"- {entry}", True, TEXT), (SCREEN_W // 2 - 240, y))
                 y += 20
             y += 10
-        foot = font_small.render("Esc: back", True, TEXT_DIM)
+        foot = font_small.render(self._hint("Esc: back"), True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
 
     def _draw_food_icon(self, surface: pygame.Surface, kind: str, cx: float, cy: float, radius: float = 7) -> None:
@@ -3932,7 +3933,7 @@ class Game:
         for mode in MODES:
             screen.blit(font_tiny.render(f"{mode:<9} {MODE_DESC[mode]}", True, TEXT_DIM), (right_x, y)); y += 18
 
-        foot = font_small.render("Esc: back", True, TEXT_DIM)
+        foot = font_small.render(self._hint("Esc: back"), True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
 
     def draw_quests(self) -> None:
@@ -3964,7 +3965,7 @@ class Game:
         note = font_tiny.render("Quests are checked when a run ends. Each pays out once per day.", True, TEXT_DIM)
         screen.blit(note, (SCREEN_W // 2 - note.get_width() // 2, y + 6))
 
-        foot = font_small.render("Esc: back", True, TEXT_DIM)
+        foot = font_small.render(self._hint("Esc: back"), True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
 
     def _draw_progress_bar(self, frac: float, y: int, label: str) -> None:
@@ -4034,7 +4035,7 @@ class Game:
         screen.blit(sub, (SCREEN_W // 2 - sub.get_width() // 2, 260))
         self._button(pygame.Rect(SCREEN_W // 2 - 90, SCREEN_H - 90, 180, 38), "OK",
                      lambda: self._press(pygame.K_RETURN), primary=True, font=font_small)
-        foot = font_small.render("Enter / Esc: back", True, TEXT_DIM)
+        foot = font_small.render(self._hint("Enter / Esc: back"), True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 40))
 
     def draw_update_download(self) -> None:
@@ -4064,7 +4065,7 @@ class Game:
         screen.blit(hint, (SCREEN_W // 2 - hint.get_width() // 2, y + 8))
         self._button(pygame.Rect(SCREEN_W // 2 - 90, SCREEN_H - 90, 180, 38), "OK",
                      lambda: self._press(pygame.K_RETURN), primary=True, font=font_small)
-        foot = font_small.render("Enter / Esc: back", True, TEXT_DIM)
+        foot = font_small.render(self._hint("Enter / Esc: back"), True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 40))
 
     def draw_easter_warning(self) -> None:
@@ -4736,6 +4737,22 @@ class Game:
         self.cursor.update(pos)
         self.cursor.draw(screen, skin[0], skin[1], excited)
 
+    PAD_HINTS = (
+        ("Enter / Esc: back", "A / B: back"),
+        ("Esc / right-click: back", "B: back"),
+        ("Right-click: back", "B: back"),
+        ("Esc: back", "B: back"),
+        ("Right-click or P to resume   Esc menu", "Start or B: resume   Select: menu"),
+        ("M mute  |  Esc menu", "Start: pause"),
+    )
+
+    def _hint(self, text: str) -> str:
+        """Footer hint text, with key names swapped for pad buttons while a pad is the active device."""
+        if self.pad_active:
+            for keys, pad in self.PAD_HINTS:
+                text = text.replace(keys, pad)
+        return text
+
     def _open_pad(self, index: int) -> None:
         if index in self._pads or not sdl_controller.is_controller(index):
             return
@@ -4759,6 +4776,7 @@ class Game:
         elif key == pygame.K_RETURN and st == STATE_PLAYING:
             return
         self._press(key)
+        self.pad_active = True
 
     def _handle_controller(self, event: pygame.event.Event) -> None:
         t = event.type
@@ -4781,6 +4799,9 @@ class Game:
             }.get(event.button)
             if key is not None:
                 self._pad_press(key)
+            elif event.button == pygame.CONTROLLER_BUTTON_BACK and self.state == STATE_PAUSED:
+                self._press(pygame.K_ESCAPE)  # Select leaves the run from Paused; B only resumes
+                self.pad_active = True
         elif t == pygame.CONTROLLERAXISMOTION and event.axis in self._stick_dir:
             v = event.value
             cur = self._stick_dir[event.axis]
@@ -4794,6 +4815,8 @@ class Game:
                                     else (pygame.K_DOWN if new > 0 else pygame.K_UP))
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.MOUSEBUTTONDOWN:
+            self.pad_active = False
         if event.type in (pygame.CONTROLLERDEVICEADDED, pygame.CONTROLLERDEVICEREMOVED,
                           pygame.CONTROLLERBUTTONDOWN, pygame.CONTROLLERAXISMOTION):
             if not self.chat_active:
@@ -4817,6 +4840,7 @@ class Game:
             return
         if event.type != pygame.KEYDOWN:
             return
+        self.pad_active = False
         key = event.key
 
         if self.chat_active:
