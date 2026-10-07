@@ -17,6 +17,7 @@ import datetime
 import math
 import os
 import textwrap
+import webbrowser
 import random
 import sys
 import tempfile
@@ -39,7 +40,7 @@ from constants import (
     POWERUP_GHOST, POWERUP_MAGNET, POWERUP_SHIELD, POWERUP_SLOWMO, POWERUP_MULT,
     POWERUP_FREEZE, POWERUP_TELEPORT, POWERUP_REVIVE, POWERUP_COLORS, POWERUP_DURATIONS, CURSE_DURATION,
     PORTAL_A, PORTAL_B, MODES, MODE_CONFIG, MODE_DESC, DIFFICULTIES, DIFFICULTY_SPEED_MULT,
-    RESUME_COUNTDOWN_STEPS, RESUME_COUNTDOWN_STEP_SECONDS, METEOR_WARN_SECONDS,
+    RESUME_COUNTDOWN_STEPS, RESUME_COUNTDOWN_STEP_SECONDS, METEOR_WARN_SECONDS, REPO_URL, SUPPORT_URL,
     GAME_VERSION, MIN_MULTIPLAYER_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
     LAN_RULESETS, LAN_RULESET_NAMES, MAPS, MAP_NAMES, MAP_THEMES, DEFAULT_THEME,
     EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS, ONLINE_SERVER_URL,
@@ -3292,9 +3293,18 @@ class Game:
 
         wallet_r = font_small.render(f"Coins: {self.wallet}", True, GOLD)
         screen.blit(wallet_r, (18, 18))
-        for i, line in enumerate(("Free software (GPL-3.0)", "github.com/youssefahmed2017/mega-snake",
-                                  "Support the game: ko-fi.com/youssefahmedabdou")):
-            screen.blit(font_tiny.render(line, True, TEXT_DIM), (18, SCREEN_H - 94 + i * 16))
+        links = (("Free software (GPL-3.0)", REPO_URL),
+                 (REPO_URL.split("://", 1)[1], REPO_URL),
+                 ("Support the game: " + SUPPORT_URL.split("://", 1)[1], SUPPORT_URL))
+        for i, (text, url) in enumerate(links):
+            y = SCREEN_H - 94 + i * 16
+            plain = font_tiny.render(text, True, TEXT_DIM)
+            rect = pygame.Rect(18, y, plain.get_width(), plain.get_height()).inflate(8, 2)
+            hover = ui.hovered(rect)
+            screen.blit(font_tiny.render(text, True, ACCENT) if hover else plain, (18, y))
+            if hover:
+                gfx.draw.line(screen, ACCENT, (18, y + plain.get_height()), (18 + plain.get_width(), y + plain.get_height()), 1)
+            self._hot(rect, click=lambda u=url: self._open_url(u))
         if self.streak_count > 0:
             streak_r = font_small.render(f"Streak: {self.streak_count} day{'s' if self.streak_count != 1 else ''}", True, ACCENT)
             screen.blit(streak_r, (18, 40))
@@ -5193,6 +5203,14 @@ class Game:
     def _hot(self, rect: pygame.Rect, attr: Optional[str] = None, index: int = 0, click=None,
              adjust=None, drag=None) -> None:
         self.hotspots.append(Hot(rect, attr, index, click, adjust, drag))
+
+    def _open_url(self, url: str) -> None:
+        try:
+            opened = webbrowser.open(url)
+        except Exception:
+            opened = False
+        if not opened:  # no browser available (some Linux setups): show the address so it can be typed
+            self.ui_toasts.append(["Couldn't open a browser", url, 4.0])
 
     def _hot_at(self, pos) -> Optional[Hot]:
         for h in reversed(self.hotspots):  # later draws sit on top of earlier ones

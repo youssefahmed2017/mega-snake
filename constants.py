@@ -406,6 +406,10 @@ GAME_VERSION = "3.2.1"
 # protocol changes in a way old builds can't follow, and mirror it in server/src/index.js.
 MIN_MULTIPLAYER_VERSION = "1.9.2"
 
+# Links shown (and clickable) on the main menu.
+REPO_URL = "https://github.com/youssefahmed2017/mega-snake"
+SUPPORT_URL = "https://ko-fi.com/youssefahmedabdou"
+
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker),
 # deployed 2026-10-01 to a free *.workers.dev subdomain. The MEGASNAKE_SERVER
 # env var overrides it, e.g. ws://127.0.0.1:8787 for a local `wrangler dev`.
