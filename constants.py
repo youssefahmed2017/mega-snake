@@ -399,7 +399,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "3.2.2"
+GAME_VERSION = "3.2.3"
 
 # Oldest version that may play multiplayer with this one. Different versions inside the
 # range play together; anything older is turned away. Raise it only when the network
@@ -418,6 +418,16 @@ ONLINE_SERVER_URL = "wss://megasnake-online.megasnake-online.workers.dev"
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("3.2.3", [
+        "Much smoother multiplayer (LAN and online):",
+        "- The host's own snake no longer hops a cell at a time",
+        "- Guests see snakes glide, with proper turns, instead of stuttering",
+        "- Turn and growth animations now show for guests too",
+        "- Snakes slide through the screen edge instead of popping across",
+        "- A slow connection no longer freezes the host's game",
+        "Works with older versions too - everyone gets smoother, but you",
+        "  need 3.2.3 on both sides for the full effect",
+    ]),
     ("3.2.2", [
         "The source and Ko-fi links on the main menu are now clickable",
         "  (hover to highlight, click to open in your browser)",
