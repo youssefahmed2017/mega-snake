@@ -128,6 +128,13 @@ jobs:
           version="$(sed -n 's/^GAME_VERSION = "\(.*\)"/\1/p' constants.py)"
           test -n "$version" || { echo "::error::Could not read GAME_VERSION from constants.py"; exit 1; }
           echo "Publishing version $version"
+          # Push unzipped folders, not the zips: butler's "--if-changed" diff can't walk the symlinks inside
+          # a zipped macOS .app once a previous build exists. unzip keeps symlinks and the executable bit.
+          # One failing channel must not stop the others, so remember the failure and report it at the end.
+          status=0
           for channel in windows osx linux; do
-            butler push --if-changed "itch/itch-$channel/MegaSnake-itch-$channel.zip" "$ITCH_TARGET:$channel" --userversion "$version"
+            mkdir -p "push/$channel"
+            unzip -q "itch/itch-$channel/MegaSnake-itch-$channel.zip" -d "push/$channel"
+            butler push --if-changed "push/$channel" "$ITCH_TARGET:$channel" --userversion "$version" || status=1
           done
+          exit $status
