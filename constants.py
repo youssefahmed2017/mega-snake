@@ -399,7 +399,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "3.1.1"
+GAME_VERSION = "3.2.0"
 
 # Oldest version that may play multiplayer with this one. Different versions inside the
 # range play together; anything older is turned away. Raise it only when the network
