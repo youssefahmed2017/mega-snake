@@ -59,6 +59,9 @@ Snake with way too many features: chaos events, roguelite perks, gamepad and 4-p
 > **Open source**
 > MEGA SNAKE is free software under the GNU GPL v3. Source code: https://github.com/youssefahmed2017/mega-snake
 >
+> **Support**
+> It's free to play. If you'd like to chip in, there's a tip jar on Ko-fi: https://ko-fi.com/youssefahmedabdou
+>
 > **Install notes**
 > The builds aren't code-signed. Windows: "More info" > "Run anyway". macOS: right-click the app > Open.
 > Linux: `chmod +x MegaSnake` if it won't start. Updates arrive through the itch app.

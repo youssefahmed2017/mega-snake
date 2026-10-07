@@ -22,6 +22,7 @@ copyright notices.
 
 Source code : https://github.com/youssefahmed2017/mega-snake
 Website     : https://mega-snake-game.vercel.app
+Support     : https://ko-fi.com/youssefahmedabdou  (optional - the game is free)
 
 Copyright (C) 2026 Youssef Ahmed.
 The fonts (Lilita One, Varela Round) are under the SIL Open Font License 1.1.

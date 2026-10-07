@@ -47,6 +47,11 @@ python main.py
 
 The online relay (a Cloudflare Worker) lives in `server/`; see `CLAUDE.md` for the development notes.
 
+## Support
+
+MEGA SNAKE is free. If you enjoy it and want to chip in, you can do that on Ko-fi:
+https://ko-fi.com/youssefahmedabdou. Totally optional, and thank you.
+
 ## License
 
 MEGA SNAKE is free software, licensed under the **GNU General Public License v3.0 only**. The full text is in

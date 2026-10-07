@@ -3292,8 +3292,9 @@ class Game:
 
         wallet_r = font_small.render(f"Coins: {self.wallet}", True, GOLD)
         screen.blit(wallet_r, (18, 18))
-        for i, line in enumerate(("Free software (GPL-3.0)", "github.com/youssefahmed2017/mega-snake")):
-            screen.blit(font_tiny.render(line, True, TEXT_DIM), (18, SCREEN_H - 78 + i * 16))
+        for i, line in enumerate(("Free software (GPL-3.0)", "github.com/youssefahmed2017/mega-snake",
+                                  "Support the game: ko-fi.com/youssefahmedabdou")):
+            screen.blit(font_tiny.render(line, True, TEXT_DIM), (18, SCREEN_H - 94 + i * 16))
         if self.streak_count > 0:
             streak_r = font_small.render(f"Streak: {self.streak_count} day{'s' if self.streak_count != 1 else ''}", True, ACCENT)
             screen.blit(streak_r, (18, 40))
