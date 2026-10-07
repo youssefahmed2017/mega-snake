@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MEGA SNAKE</title>
+<meta name="description" content="Snake, but with way too many features. A free Windows game with 8 modes, power-ups, portals, LAN multiplayer, a coin shop, and achievements.">
+<style>
+  :root{
+    --bg:#0e1016;
+    --panel:#14161e;
+    --panel-2:#1a1d28;
+    --line:#262a38;
+    --text:#ebebf5;
+    --dim:#9299ab;
+    --accent:#5ac8ff;
+    --gold:#ffd250;
+    --green:#6ee68c;
+    --danger:#ff5a5a;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  body{-webkit-font-smoothing:antialiased;}
+
+  .wrap{max-width:980px;margin:0 auto;padding:0 20px;}
+
+  header.hero{
+    padding:72px 0 56px;
+    text-align:center;
+    background:
+      radial-gradient(circle at 50% 0%, rgba(90,200,255,0.12), transparent 60%),
+      var(--bg);
+    border-bottom:1px solid var(--line);
+  }
+  .badge{
+    display:inline-block;font-size:13px;letter-spacing:.04em;color:var(--dim);
+    background:var(--panel-2);border:1px solid var(--line);border-radius:999px;
+    padding:5px 14px;margin-bottom:22px;
+  }
+  .badge b{color:var(--gold);}
+  h1{
+    font-size:clamp(40px,8vw,72px);
+    margin:0 0 12px;
+    letter-spacing:.02em;
+    font-weight:800;
+    background:linear-gradient(135deg,#fff 20%,var(--accent) 100%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+  .tagline{font-size:clamp(16px,2.6vw,20px);color:var(--dim);margin:0 0 36px;}
+
+  .cta-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;}
+  .btn{
+    display:inline-flex;align-items:center;gap:10px;
+    padding:15px 28px;border-radius:12px;font-weight:700;font-size:16px;
+    text-decoration:none;border:1px solid transparent;transition:transform .12s ease;
+  }
+  .btn:active{transform:scale(.97);}
+  .btn-primary{background:var(--accent);color:#04121c;}
+  .btn-secondary{background:var(--panel-2);color:var(--text);border-color:var(--line);}
+  .btn svg{width:18px;height:18px;flex:none;}
+
+  .meta{margin-top:18px;font-size:13px;color:var(--dim);}
+
+  .os-row{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;margin-top:14px;}
+  .os-link{font-size:13px;color:var(--dim);text-decoration:none;border-bottom:1px dashed var(--line);}
+  .os-link:hover{color:var(--accent);border-bottom-color:var(--accent);}
+  .os-link.current{color:var(--text);border-bottom-color:var(--text);}
+
+  section{padding:64px 0;}
+  section h2{
+    font-size:clamp(24px,4vw,32px);margin:0 0 6px;font-weight:800;
+  }
+  section .lede{color:var(--dim);margin:0 0 36px;max-width:640px;}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;}
+  .card{
+    background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:22px;
+  }
+  .card .icon{font-size:26px;margin-bottom:10px;display:block;}
+  .card h3{margin:0 0 8px;font-size:17px;}
+  .card p{margin:0;color:var(--dim);font-size:14px;line-height:1.55;}
+
+  .modes{display:flex;flex-wrap:wrap;gap:10px;}
+  .pill{
+    background:var(--panel-2);border:1px solid var(--line);border-radius:999px;
+    padding:8px 16px;font-size:14px;color:var(--text);
+  }
+  .pill b{color:var(--gold);}
+
+  .steps{counter-reset:step;list-style:none;margin:0;padding:0;
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;}
+  .steps li{
+    counter-increment:step;
+    background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:20px;position:relative;padding-left:56px;
+  }
+  .steps li::before{
+    content:counter(step);
+    position:absolute;left:18px;top:18px;
+    width:26px;height:26px;border-radius:8px;
+    background:var(--accent);color:#04121c;font-weight:800;
+    display:flex;align-items:center;justify-content:center;font-size:14px;
+  }
+  .steps li h3{margin:0 0 4px;font-size:15px;}
+  .steps li p{margin:0;color:var(--dim);font-size:13.5px;line-height:1.5;}
+
+  .note{
+    background:var(--panel-2);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px;font-size:13.5px;color:var(--dim);margin-top:24px;
+  }
+  .note b{color:var(--text);}
+
+  footer{
+    border-top:1px solid var(--line);padding:32px 0;text-align:center;
+    color:var(--dim);font-size:13px;
+  }
+  footer a{color:var(--dim);}
+
+  code{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;
+    padding:2px 6px;font-size:13px;color:var(--accent);}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="badge">v<b>1.8.2</b> &middot; Windows / macOS / Linux &middot; Free</span>
+    <h1>MEGA SNAKE</h1>
+    <p class="tagline">Snake, but with way too many features.</p>
+    <div class="cta-row" id="primary-cta">
+      <a class="btn btn-primary" id="primary-download" href="https://github.com/youssefahmed2017/mega-snake/releases/latest/download/MegaSnake-Windows.exe">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M5 21h14"/></svg>
+        <span id="primary-download-label">Download for Windows</span>
+      </a>
+      <a class="btn btn-secondary" href="#features">See what's in it</a>
+    </div>
+    <p class="meta">Single file, no install needed &middot; no server, no account</p>
+
+    <div class="os-row">
+      <a class="os-link" data-os="Windows" href="https://github.com/youssefahmed2017/mega-snake/releases/latest/download/MegaSnake-Windows.exe">Windows &middot; ~27&nbsp;MB</a>
+      <a class="os-link" data-os="macOS" href="https://github.com/youssefahmed2017/mega-snake/releases/latest/download/MegaSnake-macOS.zip">macOS &middot; ~18&nbsp;MB (.app.zip)</a>
+      <a class="os-link" data-os="Linux" href="https://github.com/youssefahmed2017/mega-snake/releases/latest/download/MegaSnake-Linux">Linux &middot; ~43&nbsp;MB</a>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <h2>One snake game. Way too many ideas.</h2>
+    <p class="lede">What started as a joke ("Snake, but with way too many features") actually shipped all of them.</p>
+    <div class="grid">
+      <div class="card">
+        <span class="icon">🎮</span>
+        <h3>8 game modes</h3>
+        <p>Classic wraparound, deadly Walls, growing Maze obstacles, 2-rival Battle, 60s Timed attack, one-life Hardcore, local 2-player Coop, and a seeded Daily Challenge.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🌀</span>
+        <h3>Power-ups &amp; portals</h3>
+        <p>Ghost, Magnet, Shield, Slow-mo, 2x Score, Freeze, and instant Teleport &mdash; plus teleport portal pairs and a cursed food that reverses your controls.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🌐</span>
+        <h3>LAN multiplayer</h3>
+        <p>Host a match on your local network &mdash; no server, no account. Your friend joins by typing your LAN IP and plays as a synced second snake in real time.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🗺️</span>
+        <h3>8 maps, every mode</h3>
+        <p>Pick a board layout before any match &mdash; including Coop and solo modes, not just LAN. Volcano, Everest, Desert and Glacier each have their own obstacle shapes, tint, and ambient particles (embers, snow, sand, sparkle).</p>
+      </div>
+      <div class="card">
+        <span class="icon">🪙</span>
+        <h3>Coins, quests &amp; a shop</h3>
+        <p>Earn coins every run, clear 3 new daily quests, build a play streak, and spend it all on cosmetic trail effects &mdash; including an animated Rainbow trail.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🏆</span>
+        <h3>Achievements with progress</h3>
+        <p>12 achievements with live progress bars (not just checkmarks), unlockable skins, and a real-time "New Personal Best" banner mid-run.</p>
+      </div>
+      <div class="card">
+        <span class="icon">👻</span>
+        <h3>Race your own ghost</h3>
+        <p>Every mode remembers your best run and replays it as a ghost, showing live whether you're ahead or behind. Plus an arcade top-10 with 3-letter initials.</p>
+      </div>
+      <div class="card">
+        <span class="icon">🔄</span>
+        <h3>Auto-updater</h3>
+        <p>Checks for new versions on launch and offers to download and install them for you &mdash; no need to come back to this page every time.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Pick your chaos</h2>
+    <p class="lede">Every mode reuses the same core systems &mdash; combos, power-ups, achievements &mdash; with its own twist.</p>
+    <div class="modes">
+      <span class="pill"><b>Classic</b> &middot; wraparound</span>
+      <span class="pill"><b>Walls</b> &middot; edges kill you</span>
+      <span class="pill"><b>Maze</b> &middot; growing obstacles</span>
+      <span class="pill"><b>Battle</b> &middot; 2 AI rivals</span>
+      <span class="pill"><b>Timed</b> &middot; 60s attack</span>
+      <span class="pill"><b>Hardcore</b> &middot; one life, faster</span>
+      <span class="pill"><b>Coop</b> &middot; local 2-player</span>
+      <span class="pill"><b>Daily</b> &middot; seeded challenge</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Getting started</h2>
+    <ul class="steps">
+      <li><h3>Download</h3><p>Grab the build for your OS above. Nothing to install &mdash; Windows/Linux are a single portable file, macOS is a zipped .app.</p></li>
+      <li><h3>Run it</h3><p><b>Windows:</b> double-click; SmartScreen may warn since it's unsigned &mdash; click "More info" &rarr; "Run anyway."<br><b>macOS:</b> unzip, drag <code>MegaSnake.app</code> into your <b>Applications</b> folder (needed for auto-updates), then right-click it &rarr; Open (first time only) to bypass Gatekeeper.<br><b>Linux:</b> <code>chmod +x MegaSnake-Linux && ./MegaSnake-Linux</code></p></li>
+      <li><h3>Play</h3><p>Arrow keys or WASD to move. New? Open <b>How to Play</b> from the main menu for every food and power-up. Color-blind mode is in Settings.</p></li>
+      <li><h3>Invite a friend</h3><p>Open Multiplayer &rarr; Host LAN Game, and have them join using the IP shown on your screen (same Wi-Fi/network).</p></li>
+    </ul>
+    <p class="note"><b>Note:</b> progress (coins, achievements, leaderboard) saves locally to a <code>.megasnake</code> folder in your user profile. LAN games save to the host's save file only.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    Built as a hobby project with Claude Code. Not affiliated with any other Snake game, past or present.
+  </div>
+</footer>
+
+
+<script>
+  (function () {
+    var ua = navigator.userAgent || "";
+    var plat = navigator.platform || "";
+    // Binaries live on GitHub Releases; /latest/ always resolves to the newest one.
+    var base = "https://github.com/youssefahmed2017/mega-snake/releases/latest/download/";
+    var files = {
+      Windows: base + "MegaSnake-Windows.exe",
+      macOS: base + "MegaSnake-macOS.zip",
+      Linux: base + "MegaSnake-Linux",
+    };
+    var detected = "Windows";
+    if (/Mac/i.test(plat) || /Macintosh/i.test(ua)) detected = "macOS";
+    else if (/Linux/i.test(plat) && !/Android/i.test(ua)) detected = "Linux";
+    else if (/Win/i.test(plat)) detected = "Windows";
+
+    var btn = document.getElementById("primary-download");
+    var label = document.getElementById("primary-download-label");
+    if (btn && files[detected]) {
+      btn.setAttribute("href", files[detected]);
+      label.textContent = "Download for " + detected;
+    }
+    document.querySelectorAll(".os-link").forEach(function (a) {
+      if (a.dataset.os === detected) a.classList.add("current");
+    });
+
+    // Keep the version badge in sync with the latest release; the static
+    // value in the HTML stays as a fallback if the API call fails.
+    fetch("https://api.github.com/repos/youssefahmed2017/mega-snake/releases/latest")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (rel) {
+        var b = document.querySelector(".badge b");
+        if (rel && rel.tag_name && b) b.textContent = rel.tag_name.replace(/^v/, "");
+      })
+      .catch(function () {});
+  })();
+</script>
+</body>
+</html>
