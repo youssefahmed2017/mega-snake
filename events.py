@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Chaos events and roguelite perks. Pure logic, no pygame: main.py applies the effects.
 
 An EventDirector walks one run through idle -> warning -> active -> idle. Every random

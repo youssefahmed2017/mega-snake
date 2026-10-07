@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Food, power-up, and portal spawning."""
 from __future__ import annotations
 

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """MEGA SNAKE: classic Snake with an absurd number of extra features.
 
 Modes: Classic (wrap), Walls (deadly edges), Maze (obstacles), Battle (2 AI rivals),

@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """A simple greedy AI snake that competes for food in Battle mode."""
 from __future__ import annotations
 

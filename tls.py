@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Shared SSL context for every HTTPS / WSS connection the game makes.
 
 A PyInstaller build carries its own OpenSSL, which on macOS (and some Linux

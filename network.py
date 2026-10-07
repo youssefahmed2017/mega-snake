@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Multiplayer transports: LAN (direct TCP) and Online (WebSocket relay).
 
 Up to 4 players total: one host (the authoritative simulation - "hosting"

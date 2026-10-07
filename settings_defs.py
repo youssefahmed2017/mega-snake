@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Declarative list of user settings. The Settings screen is generated from this, and
 persistence takes its defaults from it, so adding a setting is one line here plus
 whatever code reads it (via `Game.setting_get`)."""

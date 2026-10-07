@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Dev-only: create a virtual Xbox 360 pad via uinput and drive it from this terminal.
 
 SDL maps it like real hardware, so it exercises the game's controller path end to end

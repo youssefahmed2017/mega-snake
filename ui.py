@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Mouse-first widget toolkit: a per-frame hotspot record plus the drawing helpers
 (buttons, toggles, sliders, arrows, scrollbars) shared by every menu screen.
 

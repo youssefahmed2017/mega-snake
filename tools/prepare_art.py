@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Turn the raw ChatGPT art in assets/source/ into game-ready sprites in assets/art/.
 
     pip install numpy scipy pygame-ce      (dev-only; the game itself doesn't need scipy)

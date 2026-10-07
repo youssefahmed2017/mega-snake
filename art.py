@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Sprite cache for the processed art in assets/art/ (see tools/prepare_art.py).
 
 Every lookup returns an HSurface at the right pixel density for the current

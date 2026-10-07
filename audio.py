@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Procedurally synthesized sound effects (no asset files). Modern, soft timbres:
 FM-ish bells, plucked strings, airy glides and filtered-noise whooshes, all with a
 short reverb tail and a touch of stereo width."""

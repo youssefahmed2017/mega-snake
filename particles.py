@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Tiny particle system for juice: bursts on eating, death explosions, etc."""
 from __future__ import annotations
 

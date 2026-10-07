@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Daily quests: three objectives picked deterministically from today's date, each
 paying coins once per day when a finished run satisfies it."""
 from __future__ import annotations

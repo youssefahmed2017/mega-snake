@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Achievement definitions and a tracker that checks stats against them each frame."""
 from __future__ import annotations
 

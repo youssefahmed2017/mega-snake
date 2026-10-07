@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Save/load progress to a JSON file in the user's home dir: high scores, achievements,
 the coin wallet & owned cosmetics, daily streak, and run history."""
 from __future__ import annotations

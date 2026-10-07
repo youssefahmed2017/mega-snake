@@ -34,6 +34,13 @@ pip install pyinstaller
 pyinstaller --onefile --windowed --collect-data certifi --add-data "assets/fonts:assets/fonts" --add-data "assets/art:assets/art" --name MegaSnake main.py   # use ';' not ':' on Windows
 ```
 
+## License
+
+GPL-3.0-only (`LICENSE`). Every `.py` / `.js` file starts with the two-line copyright + `SPDX-License-Identifier:
+GPL-3.0-only` header — put the same header on any new source file. Art in `assets/art` and `assets/source` is under
+the same license (`assets/README.md` is its notice); the fonts in `assets/fonts` stay under their own OFL and must
+keep their `OFL-*.txt` files.
+
 ## Architecture
 
 ### Core game loop — `main.py`

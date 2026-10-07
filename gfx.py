@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Resolution-independent drawing.
 
 All game code lays things out in *logical* units (the 1028x528 canvas). Surfaces made

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+// SPDX-License-Identifier: GPL-3.0-only
 // MEGA SNAKE online relay - a Cloudflare Worker + one Durable Object per room.
 //
 // The relay never runs the game. The host player's game is the single

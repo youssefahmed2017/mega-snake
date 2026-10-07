@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
+# SPDX-License-Identifier: GPL-3.0-only
 """Generate a starter tongue animation sheet at assets/source/tongue_sheet.png.
 
 Ten equal cells in one row, on flat magenta like the other sheets. Every cell is the SAME size and
