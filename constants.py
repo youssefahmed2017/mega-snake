@@ -399,7 +399,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "3.2.0"
+GAME_VERSION = "3.2.1"
 
 # Oldest version that may play multiplayer with this one. Different versions inside the
 # range play together; anything older is turned away. Raise it only when the network
@@ -414,6 +414,11 @@ ONLINE_SERVER_URL = "wss://megasnake-online.megasnake-online.workers.dev"
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("3.2.1", [
+        "Main menu now shows the source link and a small, optional Ko-fi",
+        "  support link (no popups). The game stays free.",
+        "itch.io builds: now published to itch.io alongside GitHub releases",
+    ]),
     ("3.2.0", [
         "Chaos events: rare mid-run surprises with a 3 second warning -",
         "  Food Frenzy, Gold Rush, Blackout, Mirror Mode, Hunter, Earthquake",
