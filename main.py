@@ -21,6 +21,7 @@ import webbrowser
 import random
 import sys
 import tempfile
+import time
 from pathlib import Path
 from collections import deque
 from typing import Dict, List, Optional, Tuple
@@ -211,9 +212,23 @@ CHAT_COOLDOWN = 0.35
 # keeps real traffic flowing so that never has the chance to happen.
 LAN_HEARTBEAT_SECONDS = 4.0
 
-# Full game state is replaceable, so cap uploads instead of sending on every
-# render frame or every simulation tick. Inputs and control messages stay immediate.
+# The host sends a snapshot after every simulation tick, so each one is exactly one grid step after the
+# last and a guest can blend between them smoothly. NETWORK_SNAPSHOT_INTERVAL is only the fallback step
+# time (older hosts don't say how long a step is), and SNAPSHOT_KEEPALIVE_SECONDS makes sure timers still
+# reach guests when no tick happens (slow-mo hit-stop).
 NETWORK_SNAPSHOT_INTERVAL = 0.1
+SNAPSHOT_KEEPALIVE_SECONDS = 0.25
+# Guest-side playout buffer. The guest keeps a few snapshots waiting so network jitter doesn't show as
+# stutter, and nudges the pace (PLAYOUT_GAIN per snapshot above/below the target) to keep the buffer there.
+# On a clean connection a small buffer (PLAYOUT_TARGET_CLEAN) keeps the picture close to the host; once the
+# measured arrival jitter passes PLAYOUT_JITTER_UP it switches to a bigger one (PLAYOUT_TARGET_JITTERY), and
+# back below PLAYOUT_JITTER_DOWN. PLAYOUT_MAX_QUEUE is the most it will ever fall behind before skipping ahead.
+PLAYOUT_TARGET_CLEAN = 0.5
+PLAYOUT_TARGET_JITTERY = 1.0
+PLAYOUT_JITTER_UP = 0.015
+PLAYOUT_JITTER_DOWN = 0.008
+PLAYOUT_GAIN = 0.06
+PLAYOUT_MAX_QUEUE = 6
 
 # How long each side waits for the other to confirm its version before just
 # proceeding anyway (see _lan_host_poll / _lan_connecting_poll). Failing open
@@ -388,8 +403,9 @@ class Game:
         self.online_code_input = ""
         self.snapshot_accum = 0.0
         self.snapshot_seq = 0
+        self.tick_count = 0
         self.last_snapshot_seq = -1
-        self.snapshot_age = NETWORK_SNAPSHOT_INTERVAL
+        self._reset_playout()
         self.match_meta_sent = False
 
         self.chat_active = False
@@ -789,6 +805,8 @@ class Game:
             "time_remaining": self.time_remaining,
             "game_over": game_over,
             "game_over_reason": self.game_over_reason if game_over else "",
+            "tk": self.tick_count,                    # host tick number; a guest shows one tick per snapshot
+            "ti": round(self.move_interval(), 4),     # seconds per tick right now, so guests blend at the right pace
         }
         # mode/ruleset/map/skin never change once a match is running, so only
         # put them on the wire once per session instead of on every one of
@@ -809,7 +827,9 @@ class Game:
             if seq <= self.last_snapshot_seq:
                 return
             self.last_snapshot_seq = seq
-        self.snapshot_age = 0.0
+        ti = snap.get("ti")
+        self.client_interval = float(ti) if isinstance(ti, (int, float)) and not isinstance(ti, bool) and ti > 0.01 \
+            else NETWORK_SNAPSHOT_INTERVAL
         self.match_size = snap.get("match_size", 2)
         for i, pdata in enumerate(snap.get("players", [])):
             if pdata is None:
@@ -818,11 +838,16 @@ class Game:
                 continue
             snake = self.players[i]
             previous_body = list(snake.body) if snake is not None else []
+            old_direction = snake.direction if snake is not None else None
             if snake is None:
                 snake = self.players[i] = PlayerSnake(0, 0)
             snake.body = deque(tuple(c) for c in pdata["body"]) if pdata["body"] else deque([(0, 0)])
             snake.prev_body = previous_body or list(snake.body)
             snake.direction = tuple(pdata["dir"])
+            if old_direction is not None and snake.direction != old_direction:
+                snake.turn_anim = 0.0       # the squash-and-stretch the host plays on a turn
+            if previous_body and len(snake.body) > len(previous_body):
+                snake.tail_pop_anim = 0.0   # ...and the new tail segment's pop when it grows
             self.players_alive[i] = pdata["alive"]
 
         self.foods = [Food(f["x"], f["y"], f["kind"]) for f in snap["foods"]]
@@ -934,8 +959,9 @@ class Game:
         self.lan_role = role
         self.snapshot_accum = 0.0
         self.snapshot_seq = 0
+        self.tick_count = 0
         self.last_snapshot_seq = -1
-        self.snapshot_age = NETWORK_SNAPSHOT_INTERVAL
+        self._reset_playout()
         self.match_meta_sent = False
         if role == "host":
             self.lan_link = self.lan_host.link if self.lan_online else self.lan_host
@@ -1032,12 +1058,79 @@ class Game:
             self.lan_link.send({"type": "hello", "version": GAME_VERSION})
         self.state = STATE_LAN_HOST_WAIT  # the lobby screen, shared with the host (see draw_lan_host_wait)
 
+    # ---------- smooth multiplayer: host sends, guest plays out ----------
+
+    def _send_snapshot(self) -> None:
+        self.snapshot_accum = 0.0
+        if self.lan_link and self.lan_link.connected:
+            self.lan_link.send(self._build_snapshot())
+
+    def _host_alpha(self) -> float:
+        """How far through the current grid step the host's own snakes are drawn. Multiplayer used to draw
+        the host with no blending at all, so its snake hopped a whole cell per tick."""
+        return min(1.0, self.move_accum / self.move_interval())
+
+    def _client_alpha(self) -> float:
+        return self.client_alpha
+
+    def _reset_playout(self) -> None:
+        self.snap_queue: "deque[dict]" = deque()
+        self.client_alpha = 1.0
+        self.client_interval = NETWORK_SNAPSHOT_INTERVAL
+        self._playout_started = False
+        self._playout_target = PLAYOUT_TARGET_CLEAN
+        self._jitter = 0.0               # smoothed seconds by which snapshots arrive off their steady pace
+        self._last_arrival: Optional[float] = None
+
+    def _net_now(self) -> float:
+        return time.monotonic()
+
+    def _enqueue_snapshot(self, snap: dict) -> None:
+        now = self._net_now()
+        if self._last_arrival is not None:
+            deviation = min(0.1, abs((now - self._last_arrival) - self.client_interval))
+            self._jitter += 0.1 * (deviation - self._jitter)
+            if self._jitter > PLAYOUT_JITTER_UP:
+                self._playout_target = PLAYOUT_TARGET_JITTERY
+            elif self._jitter < PLAYOUT_JITTER_DOWN:
+                self._playout_target = PLAYOUT_TARGET_CLEAN
+        self._last_arrival = now
+        self.snap_queue.append(snap)
+        if snap.get("game_over"):  # nothing left to smooth; show the ending straight away
+            while self.snap_queue:
+                self.apply_snapshot(self.snap_queue.popleft())
+            self.client_alpha = 1.0
+
+    def _client_playout(self, dt: float) -> None:
+        """Show the host's snapshots at an even pace instead of whenever they happen to arrive.
+
+        Each snapshot is one grid step after the previous one, so blending previous -> current over the
+        host's tick time follows the snake's real path (including turns). A small queue absorbs network
+        jitter; the pace nudges up when it grows and down when it runs dry, so the buffer stays small
+        without visible speed changes."""
+        for snake in self.players:  # the turn / growth animations the host runs in update_playing
+            if snake is not None:
+                snake.tail_pop_anim += dt
+                snake.turn_anim += dt
+        q = self.snap_queue
+        if not self._playout_started:
+            if q:
+                self.apply_snapshot(q.popleft())
+                self.client_alpha = 1.0
+                self._playout_started = True
+            return
+        while len(q) > PLAYOUT_MAX_QUEUE:  # fell far behind (a long hitch): catch up rather than lag
+            self.apply_snapshot(q.popleft())
+        rate = max(0.7, min(1.6, 1.0 + PLAYOUT_GAIN * (len(q) - self._playout_target)))
+        self.client_alpha += dt * rate / self.client_interval
+        while self.client_alpha >= 1.0 and q:
+            self.apply_snapshot(q.popleft())
+            self.client_alpha -= 1.0
+        self.client_alpha = min(self.client_alpha, 1.0)
+
     def _lan_client_poll(self, dt: float) -> None:
         if not self.lan_link:
             return
-        self.snapshot_age = min(
-            NETWORK_SNAPSHOT_INTERVAL, self.snapshot_age + dt,
-        )
         # Drain whatever already arrived before checking the connection flag -
         # a graceful "host_left" is usually sitting in the queue right before
         # the socket reports closed, and it explains *why* far better than a
@@ -1047,7 +1140,7 @@ class Game:
             if mtype == "start":
                 self._lan_begin_session("client")
             elif mtype == "state":
-                self.apply_snapshot(msg)
+                self._enqueue_snapshot(msg)
             elif mtype == "chat":
                 self._on_chat_message(msg)
             elif mtype == "_slot_gone":
@@ -1065,6 +1158,7 @@ class Game:
                     self._open_chat()
             elif mtype == "resumed":
                 self.state = STATE_PLAYING
+        self._client_playout(dt)
         if not self.lan_link.connected:
             self.lan_error_msg = "Host disconnected."
             self._lan_teardown()
@@ -1794,6 +1888,9 @@ class Game:
         if self.move_accum >= interval:
             self.move_accum -= interval
             self._tick()
+            if self.lan_role == "host":
+                self.tick_count += 1
+                self._send_snapshot()  # one per tick, so a guest sees exactly one grid step per snapshot
 
         if self.zoom_timer > 0:
             self.zoom_timer = max(0.0, self.zoom_timer - dt)
@@ -1842,9 +1939,8 @@ class Game:
 
         if self.lan_role == "host" and self.lan_link and self.lan_link.connected:
             self.snapshot_accum += dt
-            if self.snapshot_accum >= NETWORK_SNAPSHOT_INTERVAL - 1e-9:
-                self.snapshot_accum = 0.0
-                self.lan_link.send(self._build_snapshot())
+            if self.snapshot_accum >= SNAPSHOT_KEEPALIVE_SECONDS:
+                self._send_snapshot()  # no tick for a while (slow-mo): keep timers and powerups fresh
 
     def _update_death_bursts(self, dt: float) -> None:
         for burst in list(self.pending_death_bursts):
@@ -2656,13 +2752,16 @@ class Game:
         gfx.draw.line(board, color, (tip_x, tip_y),
                           (tip_x + (-perp_x - dx) * fork, tip_y + (-perp_y - dy) * fork), 1)
 
-    def _draw_snake(self, board: pygame.Surface, snake: PlayerSnake, skin: list, alpha: float,
-                     ghost_active: bool, alive: bool, name_tag: str) -> None:
-        t = pygame.time.get_ticks() / 1000.0
-        # Desyncs blink/tongue timing between snakes so a 4-player match
-        # doesn't look like everyone's blinking in unison.
-        phase = (id(snake) % 1000) * 0.001
-        positions = snake.render_positions(alpha) if alive else [(x, y) for x, y in snake.body]
+    def _wrap_copies(self, positions) -> list:
+        """Whole-board offsets at which a copy of this snake is partly on screen (it is straddling an edge)."""
+        xs = [p[0] for p in positions]
+        ys = [p[1] for p in positions]
+        dxs = ([GRID_W] if min(xs) < 1.0 else []) + ([-GRID_W] if max(xs) > GRID_W - 2.0 else [])
+        dys = ([GRID_H] if min(ys) < 1.0 else []) + ([-GRID_H] if max(ys) > GRID_H - 2.0 else [])
+        return [(dx, 0) for dx in dxs] + [(0, dy) for dy in dys] + [(dx, dy) for dx in dxs for dy in dys]
+
+    def _draw_snake_body(self, board: pygame.Surface, snake: PlayerSnake, skin: list, positions: list,
+                         ghost_active: bool, alive: bool, t: float, phase: float) -> None:
         drawn = self._draw_snake_sprites(board, list(snake.body), positions, snake.direction, skin[1],
                                          ghost_active, alive, anim=snake, t=t, phase=phase)
         for i, (fx, fy) in enumerate([] if drawn else positions):
@@ -2703,10 +2802,23 @@ class Game:
                         gfx.draw.circle(board, (10, 10, 15), (int(ex), int(ey)), 3)
                     self._draw_tongue_flick(board, fx, fy, eye_dx, eye_dy, t, phase)
 
+    def _draw_snake(self, board: pygame.Surface, snake: PlayerSnake, skin: list, alpha: float,
+                     ghost_active: bool, alive: bool, name_tag: str) -> None:
+        t = pygame.time.get_ticks() / 1000.0
+        # Desyncs blink/tongue timing between snakes so a 4-player match
+        # doesn't look like everyone's blinking in unison.
+        phase = (id(snake) % 1000) * 0.001
+        positions = snake.render_positions(alpha) if alive else [(x, y) for x, y in snake.body]
+        # Across a screen edge the positions run on past it; the part that left one side is drawn again
+        # shifted by a board width, so it shows up on the other side (see PlayerSnake.render_positions).
+        for ox, oy in [(0, 0)] + (self._wrap_copies(positions) if alive else []):
+            shifted = positions if not (ox or oy) else [(x + ox, y + oy) for x, y in positions]
+            self._draw_snake_body(board, snake, skin, shifted, ghost_active, alive, t, phase)
+
         if alive and positions:
             speed_tier = min(5, self.score // 60)
             if self.speed_boost_timer > 0 or speed_tier >= 3:
-                hx, hy = positions[0]
+                hx, hy = positions[0][0] % GRID_W, positions[0][1] % GRID_H
                 cx, cy = hx * CELL_SIZE + CELL_SIZE // 2, hy * CELL_SIZE + CELL_SIZE // 2
                 glow_color = self.trail_color(t) or skin[0]
                 glow = gfx.surface((CELL_SIZE * 3, CELL_SIZE * 3), pygame.SRCALPHA)
@@ -2943,6 +3055,7 @@ class Game:
 
         if POWERUP_SHIELD in self.active_powerups and self.player_alive:
             hx, hy = self.player.render_positions(alpha)[0]
+            hx, hy = hx % GRID_W, hy % GRID_H
             cx, cy = hx * CELL_SIZE + CELL_SIZE // 2, hy * CELL_SIZE + CELL_SIZE // 2
             gfx.draw.circle(board, self.powerup_color(POWERUP_SHIELD), (int(cx), int(cy)), CELL_SIZE, width=2)
 
@@ -2979,6 +3092,7 @@ class Game:
         base = int(240 * fade)
         dark.fill((4, 6, 14, base))
         hx, hy = self.player.render_positions(alpha)[0]
+        hx, hy = hx % GRID_W, hy % GRID_H
         cx, cy = int(hx * CELL_SIZE + CELL_SIZE // 2), int(hy * CELL_SIZE + CELL_SIZE // 2)
         reach, steps = CELL_SIZE * 6, 16
         for i in range(steps):  # concentric discs, clear in the middle, fully dark at the rim
@@ -5548,10 +5662,7 @@ class Game:
             else:
                 self.update_playing(dt)
             if self.state == STATE_PLAYING:
-                if self.lan_role == "client":
-                    alpha = min(1.0, self.snapshot_age / NETWORK_SNAPSHOT_INTERVAL)
-                else:
-                    alpha = 1.0 if self.lan_role else min(1.0, self.move_accum / self.move_interval())
+                alpha = self._client_alpha() if self.lan_role == "client" else self._host_alpha()
                 self.draw_playing(alpha)
                 self.draw_sidebar()
                 self._draw_net_banner()

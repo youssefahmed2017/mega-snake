@@ -31,6 +31,7 @@ host/relay, poll()/send() to it, reconnect-with-grace for Online only.
 from __future__ import annotations
 
 import json
+import collections
 import queue
 import socket
 import threading
@@ -60,19 +61,94 @@ def get_local_ip() -> str:
         s.close()
 
 
+def _encode(obj: dict) -> str:
+    return json.dumps(obj, separators=(",", ":"))
+
+
+def _replace_key(obj: dict) -> Optional[str]:
+    """Game-state snapshots are replaceable: if one is still waiting to go out when the next is ready, the
+    old one is dead weight. Everything else (inputs, chat, pause, the final game-over snapshot) must be sent."""
+    if obj.get("type") == "state" and not obj.get("game_over"):
+        return "state"
+    return None
+
+
+class Outbox:
+    """Sends on a background thread, so a slow or stalled connection can never freeze the game loop (a
+    blocking send used to stall the whole host whenever one guest's Wi-Fi hiccuped). An item queued with a
+    `replace_key` replaces any older still-waiting item with the same key; everything else leaves in order."""
+
+    MAX_PENDING = 512
+
+    def __init__(self, write, name: str, stop_on_error: bool = True, on_error=None):
+        self._write = write
+        self._stop_on_error = stop_on_error
+        self._on_error = on_error
+        self._items: "collections.deque" = collections.deque()
+        self._cv = threading.Condition()
+        self._closing = False
+        self._thread = threading.Thread(target=self._run, name=name, daemon=True)
+        self._thread.start()
+
+    def put(self, data, replace_key: Optional[str] = None) -> bool:
+        with self._cv:
+            if self._closing:
+                return False
+            if replace_key is not None:
+                self._items = collections.deque(i for i in self._items if i[1] != replace_key)
+            elif len(self._items) >= self.MAX_PENDING:
+                return False  # the peer has stopped reading; the connection will time out on its own
+            self._items.append((data, replace_key))
+            self._cv.notify()
+        return True
+
+    def _run(self) -> None:
+        while True:
+            with self._cv:
+                while not self._items and not self._closing:
+                    self._cv.wait(0.5)
+                if not self._items:
+                    return  # closing, and everything queued has gone out
+                data, _key = self._items.popleft()
+            try:
+                self._write(data)
+            except Exception as e:
+                if self._on_error:
+                    self._on_error(e)
+                if self._stop_on_error:
+                    return
+
+    def close(self, flush_seconds: float = 0.4) -> None:
+        """Let what is already queued (say a final "host_left") leave first, but never wait long."""
+        with self._cv:
+            self._closing = True
+            self._cv.notify_all()
+        self._thread.join(timeout=flush_seconds)
+
+
 class LineSocket:
     """Wraps a connected TCP socket. A background thread reads it and pushes
-    decoded JSON objects into a thread-safe queue; send() writes straight
-    through (fine for small, infrequent messages)."""
+    decoded JSON objects into a thread-safe queue; a second one sends (see Outbox)."""
 
     def __init__(self, sock: socket.socket):
         self.sock = sock
+        try:
+            # Small messages (inputs, per-tick snapshots) must leave immediately; with Nagle's algorithm on,
+            # they can sit waiting for an ACK for 40-200ms, which reads as lag and uneven movement.
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        except OSError:
+            pass
         self.inbox: "queue.Queue[dict]" = queue.Queue()
         self.connected = True
         self.error: Optional[str] = None
         self._buf = b""
+        self._out = Outbox(sock.sendall, "tcp-writer", stop_on_error=True, on_error=self._write_failed)
         self._thread = threading.Thread(target=self._reader, daemon=True)
         self._thread.start()
+
+    def _write_failed(self, e: Exception) -> None:
+        self.error = self.error or str(e)
+        self.connected = False
 
     def _reader(self) -> None:
         try:
@@ -95,16 +171,12 @@ class LineSocket:
             self.connected = False
 
     def send(self, obj: dict) -> bool:
-        return self.send_raw((json.dumps(obj) + "\n").encode("utf-8"))
+        return self.send_raw((_encode(obj) + "\n").encode("utf-8"), _replace_key(obj))
 
-    def send_raw(self, line: bytes) -> bool:
-        try:
-            self.sock.sendall(line)
-            return True
-        except OSError as e:
-            self.error = self.error or str(e)
-            self.connected = False
+    def send_raw(self, line: bytes, replace_key: Optional[str] = None) -> bool:
+        if not self.connected:
             return False
+        return self._out.put(line, replace_key)
 
     def poll(self) -> List[dict]:
         items = []
@@ -116,6 +188,7 @@ class LineSocket:
         return items
 
     def close(self) -> None:
+        self._out.close()
         self.connected = False
         try:
             self.sock.close()
@@ -197,10 +270,11 @@ class Host:
     def send(self, obj: dict) -> bool:
         # Snapshots go out to all 1-3 guests every ~100ms; encode once instead
         # of re-serializing the same (sometimes sizeable) payload per guest.
-        line = (json.dumps(obj) + "\n").encode("utf-8")
+        line = (_encode(obj) + "\n").encode("utf-8")
+        key = _replace_key(obj)
         ok = True
         for link in self.links.values():
-            ok = link.send_raw(line) and ok
+            ok = link.send_raw(line, key) and ok
         return ok
 
     def close_slot(self, slot: str) -> None:
@@ -311,12 +385,21 @@ class OnlineLink:
         self._final = False  # the relay ended this session; don't reconnect
         self._closing = False
         self._ws = None
+        # Writes happen on their own thread so a stalled network can't freeze the game loop. A failed write
+        # is ignored: the reader thread notices the dropped socket and reconnects.
+        self._out = Outbox(self._ws_write, "ws-writer", stop_on_error=False)
         self._thread = threading.Thread(target=self._run, args=(path,), daemon=True)
         self._thread.start()
 
     @property
     def peer_present(self) -> bool:
         return all(self.roster.values())
+
+    def _ws_write(self, text: str) -> None:
+        ws = self._ws
+        if ws is None or not self.connected or self.reconnecting:
+            return  # dropped on purpose; snapshots are idempotent anyway
+        ws.send(text)
 
     def _open(self, path: str):
         # Imported lazily so LAN-only use never needs the websockets package.
@@ -442,14 +525,9 @@ class OnlineLink:
             self.reconnecting = False
 
     def send(self, obj: dict) -> bool:
-        ws = self._ws
-        if ws is None or not self.connected or self.reconnecting:
+        if self._ws is None or not self.connected or self.reconnecting:
             return False  # dropped on purpose; snapshots are idempotent anyway
-        try:
-            ws.send(json.dumps(obj))
-            return True
-        except Exception:
-            return False  # the reader thread notices the drop and reconnects
+        return self._out.put(_encode(obj), _replace_key(obj))
 
     def poll(self) -> List[dict]:
         items = []
@@ -461,6 +539,7 @@ class OnlineLink:
         return items
 
     def close(self) -> None:
+        self._out.close()  # while still "connected", so a final message such as host_left goes out first
         self._closing = True
         self.connected = False
         ws = self._ws

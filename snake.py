@@ -3,6 +3,7 @@
 """The player snake: grid-based movement with smooth interpolated rendering."""
 from __future__ import annotations
 
+import math
 from collections import deque
 from typing import Deque, List, Optional, Tuple
 
@@ -70,20 +71,42 @@ class PlayerSnake:
         return self.head in list(self.body)[1:]
 
     def render_positions(self, alpha: float) -> List[Tuple[float, float]]:
-        """Interpolate between previous and current body for smooth rendering."""
-        positions = []
+        """Interpolate between previous and current body for smooth rendering.
+
+        Across a screen edge the positions carry on past the edge (x = 31.7, then 32.3) instead of
+        jumping to the other side, so the snake slides through; the caller draws a copy shifted by a
+        board width so the part that left one side shows up on the other."""
         prev = self.prev_body
         cur = list(self.body)
         n = min(len(prev), len(cur))
+        positions: List[Tuple[float, float]] = []
         for i in range(len(cur)):
-            if i < n:
-                px, py = prev[i]
-                cx, cy = cur[i]
-                # Handle wraparound jump: if distance is huge, don't interpolate.
-                if abs(cx - px) > 1 or abs(cy - py) > 1:
-                    positions.append((cx, cy))
-                else:
-                    positions.append((px + (cx - px) * alpha, py + (cy - py) * alpha))
+            cx, cy = cur[i]
+            if i >= n:
+                positions.append((cx, cy))
+                continue
+            px, py = prev[i]
+            dx, dy = cx - px, cy - py
+            if abs(dx) == GRID_W - 1:  # stepped across the left/right edge: really one cell the other way
+                dx -= math.copysign(GRID_W, dx)
+            if abs(dy) == GRID_H - 1:
+                dy -= math.copysign(GRID_H, dy)
+            if abs(dx) > 1 or abs(dy) > 1:  # a portal jump: nothing to slide through
+                positions.append((cx, cy))
             else:
-                positions.append(cur[i])
+                positions.append((px + dx * alpha, py + dy * alpha))
+        # Keep the chain continuous: a segment that sits on the far side of the board from its neighbour
+        # (one wrapped, the other has not yet) is moved a whole board width to sit next to it.
+        for i in range(1, len(positions)):
+            x, y = positions[i]
+            ox, oy = positions[i - 1]
+            if x - ox > GRID_W / 2:
+                x -= GRID_W
+            elif ox - x > GRID_W / 2:
+                x += GRID_W
+            if y - oy > GRID_H / 2:
+                y -= GRID_H
+            elif oy - y > GRID_H / 2:
+                y += GRID_H
+            positions[i] = (x, y)
         return positions

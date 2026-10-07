@@ -148,6 +148,18 @@ authoritative rather than letting guests simulate independently.
 - Max player count is `MAX_PLAYERS` in `constants.py` (4); guest slot labels/colors are in
   `PLAYER_LABELS`/`PLAYER_COLORS`, keyed in the same order as the relay's `GUEST_SLOTS`.
 
+**Smooth multiplayer.** The host sends one snapshot per move tick (`update_playing` -> `_send_snapshot`), so each is
+exactly one grid step after the last; `tk` (tick number) and `ti` (tick seconds) are optional extra fields, and every
+legacy key is still sent so older builds keep working. A guest does not draw a snapshot on arrival: it queues them and
+`_client_playout` blends previous -> current at the host's pace, with a small buffer whose size adapts to measured
+jitter (`PLAYOUT_*` in `main.py`). `_host_alpha`/`_client_alpha` feed the same `PlayerSnake.render_positions` blend, which
+runs on past a screen edge (positions can be < 0 or >= `GRID_W`) while `_draw_snake` draws a shifted copy, so wrapping is
+smooth too. On the wire, `network.Outbox` sends on a background thread (a stalled guest can't freeze the host), drops
+a still-waiting snapshot when a newer one is ready (never `game_over`), flushes on `close()`, and LAN sockets set
+`TCP_NODELAY`. Measure any change with `python tools/mp_sim.py` (headless host + guest over a fake network with
+adjustable latency/jitter; reports speed evenness, stalls, corner cutting, edge pops, lag, traffic) — it caught what
+eyeballing couldn't, but it fakes the clock and sockets, so also test over a real loopback `network.Host`/`Client`.
+
 ### Auto-updater — `updater.py`
 Checks GitHub Releases (`REPO = "youssefahmed2017/mega-snake"`) for versions newer than `GAME_VERSION`,
 downloads the asset for the current OS, and — only for a frozen/packaged build — replaces the running
