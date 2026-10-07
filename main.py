@@ -183,7 +183,6 @@ TONGUE_HOLD = 0.18
 # Near misses: head ends up next to something lethal but survives. Rewards
 # skillful close play instead of only ever reacting to actual death.
 NEAR_MISS_COOLDOWN = 1.2      # don't re-trigger while hugging the same wall/tail
-NEAR_MISS_FLASH_DURATION = 0.3
 NEAR_MISS_HITSTOP = 0.1       # real seconds the brief slowdown lasts
 NEAR_MISS_HITSTOP_FACTOR = 0.25  # how slow the game runs during it
 
@@ -1219,7 +1218,6 @@ class Game:
         self.trail_seq = 0
         self.score_popups: List[list] = []  # [px, py, text, color, age, big]
         self.near_miss_cooldown = 0.0
-        self.near_miss_flash = 0.0
         self.hitstop_timer = 0.0
         self.hitstop_factor = 1.0
         self.zoom_timer = 0.0
@@ -1667,8 +1665,6 @@ class Game:
         if self.hitstop_timer > 0:
             self.hitstop_timer = max(0.0, self.hitstop_timer - dt)
             dt *= self.hitstop_factor
-        if self.near_miss_flash > 0:
-            self.near_miss_flash = max(0.0, self.near_miss_flash - dt)
         if self.near_miss_cooldown > 0:
             self.near_miss_cooldown = max(0.0, self.near_miss_cooldown - dt)
 
@@ -1903,20 +1899,6 @@ class Game:
             y = py - SCORE_POPUP_RISE * frac
             board.blit(label, (px - label.get_width() // 2, y - label.get_height() // 2))
 
-    def _draw_near_miss_flash(self, board: pygame.Surface) -> None:
-        if self.near_miss_flash <= 0:
-            return
-        frac = self.near_miss_flash / NEAR_MISS_FLASH_DURATION
-        w, h = board.get_size()
-        s = gfx.surface((w, h), pygame.SRCALPHA)
-        thickness = 14
-        color = (255, 255, 210, int(180 * frac))
-        gfx.draw.rect(s, color, (0, 0, w, thickness))
-        gfx.draw.rect(s, color, (0, h - thickness, w, thickness))
-        gfx.draw.rect(s, color, (0, 0, thickness, h))
-        gfx.draw.rect(s, color, (w - thickness, 0, thickness, h))
-        board.blit(s, (0, 0))
-
     def _update_death_effects(self, dt: float) -> None:
         self._update_trail(dt)
         self._update_death_bursts(dt)
@@ -2033,9 +2015,9 @@ class Game:
         )
 
     def _check_near_miss(self, cfg: dict) -> None:
-        """A whoosh + screen flash when the head survives next to something
+        """A whoosh (+ optional brief slow-mo) when the head survives next to something
         that would have killed it - skill gets its own feedback, not just
-        "you didn't die." Scoped to p1 only; see the hitstop/flash fields."""
+        "you didn't die." Scoped to p1 only; see the hitstop fields."""
         hx, hy = self.player.head
         blocked = self._blocking_set("p1")
         own_tail = set(list(self.player.body)[3:])  # skip head+neck: always adjacent, not a "miss"
@@ -2043,7 +2025,6 @@ class Game:
             off_grid = not cfg["wrap"] and not (0 <= nx < GRID_W and 0 <= ny < GRID_H)
             if off_grid or (nx, ny) in blocked or (nx, ny) in own_tail:
                 self.near_miss_cooldown = NEAR_MISS_COOLDOWN
-                self.near_miss_flash = NEAR_MISS_FLASH_DURATION
                 self.stats["near_misses"] += 1
                 if self.settings["near_miss_slowmo"]:
                     self.hitstop_timer = NEAR_MISS_HITSTOP
@@ -2960,7 +2941,6 @@ class Game:
         self.particles.draw(board)
         self._draw_blackout(board, alpha)
         self._draw_score_popups(board)
-        self._draw_near_miss_flash(board)
         self._draw_wall_vignette(board)
         self._draw_announcer(board)
         self._draw_event_hud(board)
