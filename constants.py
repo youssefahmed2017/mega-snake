@@ -399,7 +399,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "3.2.1"
+GAME_VERSION = "3.2.2"
 
 # Oldest version that may play multiplayer with this one. Different versions inside the
 # range play together; anything older is turned away. Raise it only when the network
@@ -418,6 +418,10 @@ ONLINE_SERVER_URL = "wss://megasnake-online.megasnake-online.workers.dev"
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("3.2.2", [
+        "The source and Ko-fi links on the main menu are now clickable",
+        "  (hover to highlight, click to open in your browser)",
+    ]),
     ("3.2.1", [
         "Main menu now shows the source link and a small, optional Ko-fi",
         "  support link (no popups). The game stays free.",
