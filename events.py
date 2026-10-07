@@ -130,3 +130,75 @@ def roll_perk_choices(rng: random.Random, owned: Dict[str, int], k: int = 3) -> 
     pool = [p.id for p in PERKS.values() if owned.get(p.id, 0) < p.max_stack]
     rng.shuffle(pool)
     return pool[:k]
+
+
+# ---------------------------------------------------------------- hazards (Hardcore)
+# Unlike the scheduled events above, hazards are rolled as a chance per second, and only one is
+# in flight at a time. Hardcore only: it's the "everything is out to get you" mode.
+
+HAZARD_METEOR = "meteor"
+HAZARD_SHOWER = "shower"
+HAZARD_TREMOR = "tremor"
+HAZARD_SURGE = "surge"
+HAZARD_ROCKFALL = "rockfall"
+
+HAZARD_GRACE = 12.0          # no hazards in the first seconds of a run
+HAZARD_RATE = 1 / 16         # chance per second of a new hazard once nothing else is going on...
+HAZARD_RAMP_SECONDS = 150.0  # ...doubling by this point in the run
+HAZARD_COOLDOWN = 5.0        # breather after one ends
+
+
+@dataclass(frozen=True)
+class HazardDef:
+    id: str
+    name: str
+    color: Color
+    duration: float  # how long it occupies the "one hazard at a time" slot (and the HUD banner)
+    weight: int
+    desc: str
+
+
+HAZARDS: Dict[str, HazardDef] = {h.id: h for h in (
+    HazardDef(HAZARD_METEOR, "METEOR STRIKE", (255, 130, 50), 1.8, 4, "Dodge the red zone!"),
+    HazardDef(HAZARD_SHOWER, "METEOR SHOWER", (255, 100, 40), 5.0, 2, "Four strikes, one after another."),
+    HazardDef(HAZARD_TREMOR, "TREMOR", (200, 160, 110), 6.0, 3, "The ground shakes - food slides down."),
+    HazardDef(HAZARD_SURGE, "SPEED SURGE", (255, 220, 70), 8.0, 2, "Everything gets faster."),
+    HazardDef(HAZARD_ROCKFALL, "ROCKFALL", (210, 150, 100), 9.0, 2, "Rubble drops from above."),
+)}
+
+
+class HazardRoller:
+    def __init__(self, rng: random.Random, grace: float = HAZARD_GRACE) -> None:
+        self.rng = rng
+        self.clock = 0.0
+        self.grace = grace
+        self.active: Optional[str] = None
+        self.remaining = 0.0
+        self.lockout = 0.0
+        self._last: Optional[str] = None
+
+    def update(self, dt: float) -> List[Tuple[str, str]]:
+        """Advance by dt; returns ("start" | "end", hazard_id) changes."""
+        out: List[Tuple[str, str]] = []
+        self.clock += dt
+        if self.active:
+            self.remaining -= dt
+            if self.remaining <= 0:
+                out.append(("end", self.active))
+                self.active = None
+                self.lockout = HAZARD_COOLDOWN
+            return out
+        if self.lockout > 0:
+            self.lockout -= dt
+            return out
+        if self.clock < self.grace:
+            return out
+        rate = HAZARD_RATE * (1 + min(1.0, self.clock / HAZARD_RAMP_SECONDS))
+        if self.rng.random() < rate * dt:
+            ids = [h for h in HAZARDS if h != self._last]
+            hid = self.rng.choices(ids, weights=[HAZARDS[h].weight for h in ids], k=1)[0]
+            self._last = hid
+            self.active = hid
+            self.remaining = HAZARDS[hid].duration
+            out.append(("start", hid))
+        return out

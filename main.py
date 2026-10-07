@@ -37,6 +37,7 @@ from constants import (
     POWERUP_GHOST, POWERUP_MAGNET, POWERUP_SHIELD, POWERUP_SLOWMO, POWERUP_MULT,
     POWERUP_FREEZE, POWERUP_TELEPORT, POWERUP_REVIVE, POWERUP_COLORS, POWERUP_DURATIONS, CURSE_DURATION,
     PORTAL_A, PORTAL_B, MODES, MODE_CONFIG, MODE_DESC, DIFFICULTIES, DIFFICULTY_SPEED_MULT,
+    RESUME_COUNTDOWN_STEPS, RESUME_COUNTDOWN_STEP_SECONDS, METEOR_WARN_SECONDS,
     GAME_VERSION, MIN_MULTIPLAYER_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
     LAN_RULESETS, LAN_RULESET_NAMES, MAPS, MAP_NAMES, MAP_THEMES, DEFAULT_THEME,
     EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS, ONLINE_SERVER_URL,
@@ -44,7 +45,8 @@ from constants import (
 from snake import PlayerSnake
 from enemy import EnemySnake
 from events import (EventDirector, EVENTS, EVENT_FRENZY, EVENT_GOLD_RUSH, EVENT_BLACKOUT, EVENT_MIRROR,
-                    EVENT_HUNTER, EVENT_QUAKE, PERKS, PERK_EVERY_FOODS, roll_perk_choices, featured_event)
+                    EVENT_HUNTER, EVENT_QUAKE, PERKS, PERK_EVERY_FOODS, roll_perk_choices, featured_event,
+                    HazardRoller, HAZARDS, HAZARD_METEOR, HAZARD_SHOWER, HAZARD_TREMOR, HAZARD_SURGE, HAZARD_ROCKFALL)
 from food import (
     Food, PowerUp, Downerup, spawn_food, maybe_spawn_powerup, maybe_spawn_downerup,
     maybe_spawn_portal_pair, random_free_cell,
@@ -293,6 +295,14 @@ class Game:
         self.perk_lives = 0
         self.dash_cd = 0.0
         self.temp_obstacles: set = set()
+        self.hazard_roller: Optional[HazardRoller] = None
+        self.meteors: List[list] = []          # [gx, gy, seconds until impact]
+        self.pending_meteors: List[list] = []  # [seconds until this one is aimed] (Meteor Shower)
+        self.tremor_timer = 0.0
+        self._tremor_accum = 0.0
+        self.surge_timer = 0.0
+        self.resume_countdown = 0.0
+        self._count_n = 0
         self.pad_active = False  # last real input came from a pad (drives footer hints)
         self._pads: dict = {}  # device index -> open sdl_controller.Controller (must stay open to get events)
         self._stick_dir = {pygame.CONTROLLER_AXIS_LEFTX: 0, pygame.CONTROLLER_AXIS_LEFTY: 0}
@@ -1236,7 +1246,7 @@ class Game:
             wall_phases=0, time_alive=0.0,
             combo_peak=1, length_peak=len(self.player.body),
             powerups_collected=0, portals_used=0, near_misses=0,
-            events_survived=0, perks_picked=0,
+            events_survived=0, perks_picked=0, meteors_dodged=0,
         )
 
         # Chaos events + roguelite perks (events.py). Solo runs only: the host would otherwise have
@@ -1250,6 +1260,14 @@ class Game:
         self.temp_obstacles = set()
         solo = self.lan_role is None and not cfg["coop"]
         self.perks_on = bool(cfg.get("perks")) and solo
+        self.hazard_roller = HazardRoller(random.Random()) if cfg.get("hazards") and solo else None
+        self.meteors = []
+        self.pending_meteors = []
+        self.tremor_timer = 0.0
+        self._tremor_accum = 0.0
+        self.surge_timer = 0.0
+        self.resume_countdown = 0.0
+        self._count_n = 0
         self.event_director = None
         if cfg.get("events") and solo:
             if cfg["seeded"]:
@@ -1356,10 +1374,7 @@ class Game:
                     self.particles.burst(*grid_to_px(*self._center(r.head)), color, count=18)
             self.rivals = [r for r in self.rivals if not r.hunter]
         elif eid == EVENT_QUAKE:
-            for cell in self.temp_obstacles:
-                self.particles.burst(*grid_to_px(*self._center(cell)), color, count=5)
-            self.obstacles -= self.temp_obstacles
-            self.temp_obstacles = set()
+            self._clear_rubble(color)
 
     def _spawn_hunter(self) -> None:
         hx, hy = self.player.head
@@ -1388,6 +1403,127 @@ class Game:
             self.particles.burst(*grid_to_px(*self._center(cell)), EVENTS[EVENT_QUAKE].color, count=8)
             placed += 1
 
+    def _start_countdown(self) -> None:
+        if self.lan_role is not None:
+            return  # guests can't see a host-side freeze
+        self.resume_countdown = RESUME_COUNTDOWN_STEPS * RESUME_COUNTDOWN_STEP_SECONDS
+        self._count_n = RESUME_COUNTDOWN_STEPS + 1
+
+    def _on_hazard(self, kind: str, hid: str) -> None:
+        hz = HAZARDS[hid]
+        if kind == "end":
+            if hid == HAZARD_TREMOR:
+                self.tremor_timer = 0.0
+            elif hid == HAZARD_SURGE:
+                self.surge_timer = 0.0
+            elif hid == HAZARD_ROCKFALL:
+                self._clear_rubble(hz.color)
+            return
+        self._announce(hz.name + "!", hz.color, life=1.6)
+        self.sounds.play(self.sounds.portal)
+        if hid == HAZARD_METEOR:
+            self.pending_meteors.append([0.0])
+        elif hid == HAZARD_SHOWER:
+            self.pending_meteors.extend([[i * 1.1] for i in range(4)])
+        elif hid == HAZARD_TREMOR:
+            self.tremor_timer = hz.duration
+            self._tremor_accum = 0.0
+            self.shake(0.5, 5)
+            self._rumble(0.7, 0.3, 400)
+        elif hid == HAZARD_SURGE:
+            self.surge_timer = hz.duration
+        elif hid == HAZARD_ROCKFALL:
+            self.shake(0.9, 9)
+            self._rumble(0.9, 0.6, 500)
+            self._drop_rubble()
+
+    def _update_hazards(self, dt: float) -> None:
+        if self.surge_timer > 0:
+            self.surge_timer = max(0.0, self.surge_timer - dt)
+        if self.pending_meteors:
+            for item in self.pending_meteors:
+                item[0] -= dt
+            due = sum(1 for item in self.pending_meteors if item[0] <= 0)
+            self.pending_meteors = [item for item in self.pending_meteors if item[0] > 0]
+            for _ in range(due):
+                self._spawn_meteor()
+        for m in list(self.meteors):
+            m[2] -= dt
+            if m[2] <= 0:
+                self.meteors.remove(m)
+                self._meteor_impact(m[0], m[1])
+        self._update_tremor(dt)
+
+    def _spawn_meteor(self) -> None:
+        if not self.player_alive:
+            return
+        body = list(self.player.body)
+        r = random.random()
+        if r < 0.5:
+            cx, cy = self.player.head
+        elif r < 0.75:
+            cx, cy = random.choice(body)
+        else:  # somewhere near you, so you also have to watch the board, not just yourself
+            hx, hy = self.player.head
+            cx, cy = hx + random.randint(-7, 7), hy + random.randint(-5, 5)
+        cx = max(1, min(GRID_W - 2, cx))
+        cy = max(1, min(GRID_H - 2, cy))
+        self.meteors.append([cx, cy, METEOR_WARN_SECONDS])
+
+    def _meteor_impact(self, gx: int, gy: int) -> None:
+        px, py = grid_to_px(*self._center((gx, gy)))
+        self.particles.burst(px, py, (255, 150, 60), count=44, speed=320, life=0.8)
+        self.shake(0.5, 8)
+        self._rumble(0.8, 0.5, 300)
+        self.sounds.play(self.sounds.bomb)
+        zone = {(gx + dx, gy + dy) for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
+        for f in [f for f in self.foods if (f.x, f.y) in zone]:
+            self.foods.remove(f)
+            if not f.temp:
+                self._spawn_food()
+        self.powerups = [p for p in self.powerups if (p.x, p.y) not in zone]
+        self.downerups = [d for d in self.downerups if (d.x, d.y) not in zone]
+        if not self.player_alive or POWERUP_GHOST in self.active_powerups:
+            return
+        if any(tuple(c) in zone for c in self.player.body):
+            if self._consume_save("p1"):
+                self.particles.burst(*grid_to_px(*self._center(self.player.head)), (120, 255, 190), count=20)
+            else:
+                self._kill_snake("p1", "You were hit by a meteor.")
+        else:
+            self.stats["meteors_dodged"] += 1
+
+    def _update_tremor(self, dt: float) -> None:
+        if self.tremor_timer <= 0:
+            return
+        self.tremor_timer = max(0.0, self.tremor_timer - dt)
+        self._tremor_accum += dt
+        if self._tremor_accum < 0.5:
+            return
+        self._tremor_accum -= 0.5
+        self.shake(0.15, 3)
+        blocked = set(self.obstacles)
+        for snake in self.players:
+            if snake is not None:
+                blocked |= set(snake.body)
+        blocked |= {(p.x, p.y) for p in self.powerups} | {(d.x, d.y) for d in self.downerups}
+        if self.portal_pair:
+            blocked |= set(self.portal_pair)
+        food_cells = {(f.x, f.y) for f in self.foods}
+        for f in sorted(self.foods, key=lambda f: -f.y):  # lowest first so a stack falls together
+            below = (f.x, f.y + 1)
+            if f.y + 1 < GRID_H and below not in blocked and below not in food_cells:
+                food_cells.discard((f.x, f.y))
+                food_cells.add(below)
+                self.particles.burst(*grid_to_px(*self._center((f.x, f.y))), (200, 160, 110), count=3, speed=60)
+                f.y += 1
+
+    def _clear_rubble(self, color) -> None:
+        for cell in self.temp_obstacles:
+            self.particles.burst(*grid_to_px(*self._center(cell)), color, count=5)
+        self.obstacles -= self.temp_obstacles
+        self.temp_obstacles = set()
+
     def _consume_save(self, tag: str) -> bool:
         """A Shield or a Second Wind charge turns one fatal hit into a clutch save."""
         if POWERUP_SHIELD in self.active_powerups:
@@ -1399,6 +1535,7 @@ class Game:
         self.shake(0.2, 4)
         self._rumble(0.5, 0.6, 200)
         self._announce("CLUTCH SAVE!", GREEN)
+        self._start_countdown()
         return True
 
     def _hunter_check(self, hunter: EnemySnake) -> None:
@@ -1442,9 +1579,11 @@ class Game:
         self.perk_choices = []
         self.move_accum = 0.0
         self.state = STATE_PLAYING
+        self._start_countdown()
 
     def _try_dash(self) -> None:
-        if not self.perks.get("dash") or self.dash_cd > 0 or not self.player_alive or self.death_pause_timer > 0:
+        if (not self.perks.get("dash") or self.dash_cd > 0 or not self.player_alive or self.death_pause_timer > 0
+                or self.resume_countdown > 0):
             return
         self.active_powerups[POWERUP_GHOST] = max(self.active_powerups.get(POWERUP_GHOST, 0.0), 1.2)
         self.dash_cd = 10.0
@@ -1463,6 +1602,8 @@ class Game:
         if POWERUP_SLOWMO in self.active_powerups:
             interval *= 1.7
         interval *= 1 + 0.08 * self.perks.get("featherweight", 0)
+        if self.surge_timer > 0:
+            interval *= 0.72
         return max(0.03, interval)
 
     def update_playing(self, dt: float) -> None:
@@ -1508,6 +1649,21 @@ class Game:
                 self._finalize_game_over()
             return
 
+        if self.resume_countdown > 0:  # 3-2-1 after a clutch save / perk pick: the whole run is frozen
+            self.resume_countdown = max(0.0, self.resume_countdown - dt)
+            n = math.ceil(self.resume_countdown / RESUME_COUNTDOWN_STEP_SECONDS)
+            if n > 0 and n != self._count_n:
+                self._count_n = n
+                self.sounds.play(self.sounds.menu_move)
+            for a in self.announcer_queue:
+                a[2] -= dt
+            self.announcer_queue = [a for a in self.announcer_queue if a[2] > 0]
+            for p in self.score_popups:
+                p[4] += dt
+            self.particles.update(dt)
+            self._update_ambient(dt)
+            return
+
         if self.hitstop_timer > 0:
             self.hitstop_timer = max(0.0, self.hitstop_timer - dt)
             dt *= self.hitstop_factor
@@ -1524,6 +1680,10 @@ class Game:
                 self._on_event(kind, eid)
         if self.dash_cd > 0:
             self.dash_cd = max(0.0, self.dash_cd - dt)
+        if self.hazard_roller:
+            for kind, hid in self.hazard_roller.update(dt):
+                self._on_hazard(kind, hid)
+        self._update_hazards(dt)
 
         if self.time_remaining is not None:
             self.time_remaining -= dt
@@ -2126,6 +2286,7 @@ class Game:
                 self.particles.burst(px, py, (120, 255, 190), count=20)
                 self.shake(0.25, 5)
                 self._announce("DEFUSED!", GREEN)
+                self._start_countdown()
             else:
                 self.particles.burst(px, py, DANGER, count=30, speed=260, life=0.7)
                 self.shake(0.35, 8)
@@ -2768,6 +2929,8 @@ class Game:
             cx, cy = d.x * CELL_SIZE + CELL_SIZE // 2, d.y * CELL_SIZE + CELL_SIZE // 2
             self._draw_downerup_icon(board, d.kind, cx, cy, CELL_SIZE // 2 - 2)
 
+        self._draw_meteors(board)
+
         for rival in self.rivals:
             if not rival.alive:
                 continue
@@ -2801,6 +2964,7 @@ class Game:
         self._draw_wall_vignette(board)
         self._draw_announcer(board)
         self._draw_event_hud(board)
+        self._draw_countdown(board)
 
         self._draw_backdrop(0.8)  # shows in the strips above/below the board
         frame = pygame.Rect(-3, BOARD_Y - 3, GRID_W * CELL_SIZE + 6, GRID_H * CELL_SIZE + 6)
@@ -2834,27 +2998,78 @@ class Game:
             gfx.draw.circle(dark, (4, 6, 14, int(base * frac ** 1.6)), (cx, cy), max(1, int(reach * frac)))
         board.blit(dark, (0, 0))
 
-    def _draw_event_hud(self, board: pygame.Surface) -> None:
+    def _hud_event(self):
+        """(name, color, seconds, total, incoming) for the banner: a scheduled event, or a Hardcore hazard."""
         d = self.event_director
-        if not d or not (d.active or d.incoming):
-            return
-        w = board.get_width()
-        if d.active:
+        if d and d.active:
             ev = EVENTS[d.active]
-            text, frac = f"{ev.name}  {d.remaining:0.0f}s", d.remaining / ev.duration
-            color = ev.color
-        else:
+            return ev.name, ev.color, d.remaining, ev.duration, False
+        if d and d.incoming:
             ev = EVENTS[d.incoming]
-            text, frac = f"INCOMING: {ev.name}  {d.warn_left:0.0f}", None
-            color = ev.color if int(pygame.time.get_ticks() / 250) % 2 == 0 else TEXT
+            return ev.name, ev.color, d.warn_left, 0.0, True
+        hz = self.hazard_roller
+        if hz and hz.active:
+            h = HAZARDS[hz.active]
+            return h.name, h.color, hz.remaining, h.duration, False
+        return None
+
+    def _draw_event_hud(self, board: pygame.Surface) -> None:
+        info = self._hud_event()
+        if not info:
+            return
+        name, base_color, seconds, total, incoming = info
+        w = board.get_width()
+        if incoming:
+            text, frac = f"INCOMING: {name}  {seconds:0.0f}", None
+            color = base_color if int(pygame.time.get_ticks() / 250) % 2 == 0 else TEXT
+        else:
+            text, frac, color = f"{name}  {seconds:0.0f}s", seconds / total, base_color
         label = font_small.render(text, True, color)
         pill = pygame.Rect(w // 2 - (label.get_width() + 32) // 2, 6, label.get_width() + 32, 30)
         gfx.draw.rect(board, (10, 12, 20), pill, border_radius=8)
-        gfx.draw.rect(board, ev.color, pill, width=2, border_radius=8)
+        gfx.draw.rect(board, base_color, pill, width=2, border_radius=8)
         board.blit(label, (pill.x + 16, pill.y + (pill.height - label.get_height()) // 2))
         if frac is not None:
             bar = pygame.Rect(pill.x + 8, pill.bottom - 6, int((pill.width - 16) * frac), 3)
-            gfx.draw.rect(board, ev.color, bar, border_radius=1)
+            gfx.draw.rect(board, base_color, bar, border_radius=1)
+
+    def _draw_meteors(self, board: pygame.Surface) -> None:
+        t = pygame.time.get_ticks() / 1000.0
+        for gx, gy, left in self.meteors:
+            frac = max(0.0, min(1.0, left / METEOR_WARN_SECONDS))  # 1 at spawn -> 0 at impact
+            zone = pygame.Rect((gx - 1) * CELL_SIZE, (gy - 1) * CELL_SIZE, CELL_SIZE * 3, CELL_SIZE * 3)
+            pulse = 0.5 + 0.5 * math.sin(t * (8 + 16 * (1 - frac)))
+            fill = gfx.surface(zone.size, pygame.SRCALPHA)
+            gfx.draw.rect(fill, (255, 60, 40, int(40 + 70 * (1 - frac) + 70 * pulse * (1 - frac))),
+                          (0, 0, zone.width, zone.height), border_radius=8)
+            board.blit(fill, zone.topleft)
+            gfx.draw.rect(board, (255, 90, 60), zone, width=2, border_radius=8)
+            cx, cy = zone.center
+            gfx.draw.line(board, (255, 130, 90), (cx - CELL_SIZE, cy), (cx + CELL_SIZE, cy), 2)
+            gfx.draw.line(board, (255, 130, 90), (cx, cy - CELL_SIZE), (cx, cy + CELL_SIZE), 2)
+            my = cy - frac * CELL_SIZE * 12  # the rock itself, dropping in from above the board
+            gfx.draw.line(board, (255, 110, 40), (cx, my - CELL_SIZE * 3), (cx, my), 6)
+            gfx.draw.circle(board, (255, 170, 60), (int(cx), int(my)), CELL_SIZE // 2 + 2)
+            gfx.draw.circle(board, (255, 240, 180), (int(cx), int(my)), CELL_SIZE // 4)
+
+    def _draw_countdown(self, board: pygame.Surface) -> None:
+        if self.resume_countdown <= 0:
+            return
+        step = RESUME_COUNTDOWN_STEP_SECONDS
+        n = math.ceil(self.resume_countdown / step)
+        frac = (self.resume_countdown - (n - 1) * step) / step  # 1 -> 0 within each number
+        w, h = board.get_size()
+        shade = gfx.surface((w, h), pygame.SRCALPHA)
+        shade.fill((0, 0, 0, 70))
+        board.blit(shade, (0, 0))
+        scale = 1.7 + 1.3 * frac
+        label = gfx.zoom(font_big.render(str(n), True, GOLD), scale)
+        shadow = gfx.zoom(font_big.render(str(n), True, (0, 0, 0)), scale)
+        cx, cy = w // 2, h * 2 // 3  # lower third: the callout banner owns the upper third
+        board.blit(shadow, (cx - shadow.get_width() // 2 + 3, cy - shadow.get_height() // 2 + 3))
+        board.blit(label, (cx - label.get_width() // 2, cy - label.get_height() // 2))
+        hint = font_small.render("Get ready - steer now!", True, TEXT)
+        board.blit(hint, (cx - hint.get_width() // 2, cy + 52))
 
     def _wrap_px(self, text: str, font: pygame.font.Font, max_w: int) -> List[str]:
         lines, cur = [], ""

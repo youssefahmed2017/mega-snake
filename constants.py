@@ -12,6 +12,13 @@ FPS = 60
 
 BASE_MOVE_INTERVAL = 0.12  # seconds per grid step at speed 1.0
 
+# After a clutch save or a perk pick the run freezes for a 3-2-1 so you can re-aim before it resumes.
+RESUME_COUNTDOWN_STEPS = 3
+RESUME_COUNTDOWN_STEP_SECONDS = 0.8
+
+# Hardcore meteor strikes: how long the red warning zone shows before impact.
+METEOR_WARN_SECONDS = 1.4
+
 # Colors
 BG = (14, 16, 22)
 GRID_LINE = (22, 25, 33)
@@ -155,14 +162,16 @@ MODES = ["Classic", "Walls", "Maze", "Battle", "Timed", "Hardcore", "Coop", "Dai
 # wrap: edges wrap instead of killing. powerups: power-ups spawn. obstacles: maze-style
 # growth. rivals: number of AI rival snakes. timer: seconds for a countdown mode (or None).
 # coop: local two-player. seeded: today's date seeds the initial layout. events / perks
-# (optional, default off): chaos events during the run / a perk pick every few foods.
+# / hazards (optional, default off): chaos events during the run / a perk pick every few foods /
+# random per-second bad events (Hardcore).
 MODE_CONFIG = {
     "Classic": dict(wrap=True, powerups=True, obstacles=False, rivals=0, timer=None, coop=False, seeded=False, speed_mult=1.0),
     "Walls": dict(wrap=False, powerups=True, obstacles=False, rivals=0, timer=None, coop=False, seeded=False, speed_mult=1.0),
     "Maze": dict(wrap=False, powerups=True, obstacles=True, rivals=0, timer=None, coop=False, seeded=False, speed_mult=1.0),
     "Battle": dict(wrap=False, powerups=True, obstacles=False, rivals=2, timer=None, coop=False, seeded=False, speed_mult=1.0),
     "Timed": dict(wrap=True, powerups=True, obstacles=False, rivals=0, timer=60, coop=False, seeded=False, speed_mult=1.0),
-    "Hardcore": dict(wrap=False, powerups=False, obstacles=True, rivals=0, timer=None, coop=False, seeded=False, speed_mult=1.35),
+    "Hardcore": dict(wrap=False, powerups=False, obstacles=True, rivals=0, timer=None, coop=False, seeded=False, speed_mult=1.35,
+                     hazards=True),
     "Coop": dict(wrap=False, powerups=True, obstacles=False, rivals=0, timer=None, coop=True, seeded=False, speed_mult=1.0),
     "Daily": dict(wrap=False, powerups=True, obstacles=True, rivals=0, timer=None, coop=False, seeded=True, speed_mult=1.0,
                   events=True),
@@ -176,7 +185,7 @@ MODE_DESC = {
     "Maze": "Walls + obstacles that grow over time.",
     "Battle": "Walls + two AI rivals want your food.",
     "Timed": "60 second score attack. Wraps around.",
-    "Hardcore": "No power-ups. Faster ramp. One life.",
+    "Hardcore": "No power-ups. Faster ramp. One life. Meteors and tremors strike.",
     "Coop": "Local 2-player. Arrows + WASD, shared board.",
     "Daily": "Same layout and chaos events for everyone, today only.",
     "Roguelite": "Walls + chaos events. Pick a perk every 8 foods.",
@@ -409,6 +418,11 @@ CHANGELOG = [
         "New Roguelite mode: Walls + chaos events, and a pick-1-of-3 perk",
         "  every 8 foods (Second Wind, Magnet Field, Gourmet, Midas Touch,",
         "  Featherweight, Lucky Charm, Combo Keeper, Phase Dash)",
+        "Hardcore now has random bad events (chance per second): meteor strikes",
+        "  and showers you have to dodge, tremors that make food fall, speed",
+        "  surges and rockfalls",
+        "After a clutch save (shield / Second Wind) or a perk pick the run",
+        "  freezes for a 3-2-1 so you can re-aim before it resumes",
         "Daily now has chaos events too - the same ones, at the same time, for",
         "  everyone - and a 'featured event' of the day shown on mode select",
         "Power-ups, downer-ups, portals and golden food are now much rarer",

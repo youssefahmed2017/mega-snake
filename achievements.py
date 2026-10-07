@@ -60,6 +60,8 @@ ACHIEVEMENTS: List[Achievement] = [
                 lambda s: s.get("events_survived", 0) >= 3),
     Achievement("fully_loaded", "Fully Loaded", "Pick 5 perks in one Roguelite run",
                 lambda s: s.get("perks_picked", 0) >= 5),
+    Achievement("meteor_dodger", "Duck and Cover", "Dodge 8 meteors in one Hardcore run",
+                lambda s: s.get("meteors_dodged", 0) >= 8),
     Achievement("roguelite_150", "Build Master", "Score 150 in Roguelite mode",
                 lambda s: s.get("mode") == "Roguelite" and s["score"] >= 150),
 

@@ -114,8 +114,11 @@ Earthquake rubble are tracked (`Food.temp`, `Game.temp_obstacles`) so they clean
 for LAN/Coop) because the host would otherwise have to stream them to guests. Perks (Roguelite, every
 `PERK_EVERY_FOODS` foods) open `STATE_PERK_PICK` (drawn over the frozen run like Paused); a perk's effect is
 either applied at pick time (`_choose_perk`) or read from `Game.perks` where it matters (`move_interval`,
-`_food_score`, magnet block, spawn rate, `_consume_save` for Shield/Second Wind). Pickup rarity (power-ups,
-downer-ups, portals) is per-second (`*_SPAWN_RATE` in `constants.py`, rolled with `dt`), not per frame.
+`_food_score`, magnet block, spawn rate, `_consume_save` for Shield/Second Wind). Hardcore instead uses
+`HazardRoller` (a per-second chance, one hazard at a time: meteors with a red warning zone, tremor = food slides
+down, speed surge, rockfall) via `_on_hazard`/`_update_hazards`. A clutch save or perk pick calls
+`_start_countdown()`, which freezes `update_playing` for a 3-2-1 (solo only; a LAN host can't show it to guests).
+Pickup rarity (power-ups, downer-ups, portals) is per-second (`*_SPAWN_RATE` in `constants.py`, rolled with `dt`), not per frame.
 
 ### Multiplayer — authoritative host, dumb clients
 In both LAN and Online modes, **the host's `Game` instance is the only authoritative simulation**; every
