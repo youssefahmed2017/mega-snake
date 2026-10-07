@@ -1,0 +1,133 @@
+name: Publish to itch.io
+
+# Builds an itch.io flavour of the game (same code, auto-updater switched off because itch updates it)
+# for Windows, macOS and Linux, then uploads each with butler. It does nothing until the ITCH_TARGET
+# repository variable is set. One-time setup and the page copy are in itch/PAGE.md.
+#
+# - Pushing a version tag (v3.2.0, ...) builds and publishes.
+# - Run it by hand (Actions > Publish to itch.io > Run workflow) to just build the packages as
+#   downloadable artifacts; tick "push" to publish too.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      push:
+        description: "Also publish to itch.io (otherwise only build the packages)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: ${{ vars.ITCH_TARGET != '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            channel: windows
+            output: dist/MegaSnake.exe
+            pyinstaller_args: --onefile --windowed --add-data "assets/fonts;assets/fonts" --add-data "assets/art;assets/art"
+          - os: macos-latest
+            channel: osx
+            output: dist/MegaSnake.app
+            pyinstaller_args: --windowed --add-data "assets/fonts:assets/fonts" --add-data "assets/art:assets/art"
+          - os: ubuntu-latest
+            channel: linux
+            output: dist/MegaSnake
+            pyinstaller_args: --onefile --add-data "assets/fonts:assets/fonts" --add-data "assets/art:assets/art"
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Install SDL runtime deps (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 libsdl2-ttf-2.0-0
+
+      - name: Mark this build as the itch.io flavour (auto-updater off)
+        run: printf 'STORE = "itch"\n' > build_info.py
+
+      - name: Build with PyInstaller
+        run: pyinstaller ${{ matrix.pyinstaller_args }} --collect-data certifi --name MegaSnake main.py
+
+      - name: Package the game with its license and readme
+        run: |
+          mkdir package
+          cp -R "${{ matrix.output }}" package/
+          cp LICENSE package/LICENSE.txt
+          cp itch/README-itch.txt package/README.txt
+
+      # Each platform zips its own package so file modes survive (the Linux binary and the macOS app
+      # must stay executable). butler unpacks zips and keeps those modes.
+      - name: Zip (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: Compress-Archive -Path package/* -DestinationPath MegaSnake-itch-${{ matrix.channel }}.zip
+
+      - name: Zip (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: (cd package && zip -qr ../MegaSnake-itch-${{ matrix.channel }}.zip .)
+
+      - name: Zip (macOS)
+        if: matrix.os == 'macos-latest'
+        run: ditto -c -k --sequesterRsrc package MegaSnake-itch-${{ matrix.channel }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: itch-${{ matrix.channel }}
+          path: MegaSnake-itch-${{ matrix.channel }}.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: ${{ github.event_name == 'push' || inputs.push }}
+    runs-on: ubuntu-latest
+    env:
+      ITCH_TARGET: ${{ vars.ITCH_TARGET }}
+      BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: itch
+
+      - name: Install butler (itch.io's official uploader)
+        run: |
+          curl -fsSL -o butler.zip https://broth.itch.ovh/butler/linux-amd64/LATEST/archive/default
+          unzip -q butler.zip -d butler
+          chmod +x butler/butler
+          echo "$PWD/butler" >> "$GITHUB_PATH"
+
+      - name: Push to itch.io
+        run: |
+          if [ -z "$BUTLER_API_KEY" ]; then
+            echo "::error::Add the BUTLER_API_KEY repository secret first (see itch/PAGE.md)."
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="$(date +%Y.%m.%d)-${GITHUB_SHA::7}"
+          fi
+          for channel in windows osx linux; do
+            butler push --if-changed "itch/itch-$channel/MegaSnake-itch-$channel.zip" "$ITCH_TARGET:$channel" --userversion "$version"
+          done

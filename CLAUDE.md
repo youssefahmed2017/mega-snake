@@ -155,6 +155,15 @@ executable via a detached, platform-specific helper script spawned just before `
 overwrite a memory-mapped running Windows exe from inside itself). All network/disk work runs on a background
 thread; `main.py` polls the checker/downloader's plain attributes once per frame rather than blocking.
 
+### itch.io build — `.github/workflows/itch.yml`, `build_info.py`, `itch/`
+A second workflow builds an itch.io flavour on a `v*` tag (or by hand; "push" input controls publishing) and
+uploads it with butler to `${{ vars.ITCH_TARGET }}` using the `BUTLER_API_KEY` secret; it does nothing until
+`ITCH_TARGET` is set. The only code difference is `build_info.STORE`: the committed default is `"github"`, and the
+workflow overwrites the file with `"itch"` before PyInstaller runs. Any non-`"github"` store turns the auto-updater
+off (no startup check, no "Check for Updates" menu item, see `MENU_ITEMS` and `Game.__init__`) because the store
+updates the game. Each platform zips its own package (binary + `LICENSE.txt` + `itch/README-itch.txt`) so exec
+bits survive. One-time setup and the page copy are in `itch/PAGE.md`.
+
 ### Release pipeline — `.github/workflows/build.yml`
 Every push to `main` and every `v*` tag builds Windows/macOS/Linux binaries via PyInstaller. Only a `v*` tag
 additionally runs the `release` job, which publishes a GitHub Release with the three binaries as stable,

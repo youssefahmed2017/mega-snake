@@ -59,6 +59,7 @@ from audio import SoundBank
 import persistence
 import network
 import updater
+from build_info import STORE
 from quests import quests_for_date
 import gfx
 import ui
@@ -243,6 +244,8 @@ MENU_ITEMS = [
     "Start Game", "Mode", "Skin", "Multiplayer", "Daily Quests", "Shop", "Settings",
     "How to Play", "Stats", "Leaderboard", "Achievements", "Changelog", "Check for Updates", "Quit",
 ]
+if STORE != "github":  # a store build (itch.io, ...) is updated by the store, not by us
+    MENU_ITEMS.remove("Check for Updates")
 PAUSE_ITEMS = ["Resume", "Restart", "Settings", "Main Menu"]
 LAN_HOST_PAUSE_ITEMS = ["Resume", "Settings", "End Session"]
 LAN_MENU_ITEMS = ["Host LAN Game", "Join LAN Game", "Host Online Game", "Join Online Game", "Back"]
@@ -442,15 +445,17 @@ class Game:
         self.prev_state_before_update = STATE_MENU
 
         self.reset_run()
-        failed_update = self._consume_pending_update()
+        failed_update = self._consume_pending_update() if STORE == "github" else None
         if failed_update:
             # The last update relaunched this same old version. Offering it
             # again would just loop forever, so explain instead.
             self.update_error_msg = failed_update
             self.state = STATE_UPDATE_ERROR
-        else:
+        elif STORE == "github":
             self.update_checker = updater.UpdateChecker(GAME_VERSION)
             self.state = STATE_UPDATE_CHECK
+        else:
+            self.state = STATE_MENU
 
     # ---------- helpers ----------
 
@@ -3287,6 +3292,8 @@ class Game:
 
         wallet_r = font_small.render(f"Coins: {self.wallet}", True, GOLD)
         screen.blit(wallet_r, (18, 18))
+        for i, line in enumerate(("Free software (GPL-3.0)", "github.com/youssefahmed2017/mega-snake")):
+            screen.blit(font_tiny.render(line, True, TEXT_DIM), (18, SCREEN_H - 78 + i * 16))
         if self.streak_count > 0:
             streak_r = font_small.render(f"Streak: {self.streak_count} day{'s' if self.streak_count != 1 else ''}", True, ACCENT)
             screen.blit(streak_r, (18, 40))
