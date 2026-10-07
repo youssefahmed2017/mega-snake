@@ -23,6 +23,7 @@ class Food:
     x: int
     y: int
     kind: str
+    temp: bool = False  # event-spawned extra: eating it doesn't trigger a replacement spawn
 
 
 @dataclass

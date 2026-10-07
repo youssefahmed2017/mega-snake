@@ -9,11 +9,13 @@ from constants import GRID_W, GRID_H
 
 
 class EnemySnake:
-    def __init__(self, x: int, y: int) -> None:
+    def __init__(self, x: int, y: int, hunter: bool = False) -> None:
         self.body: List[Tuple[int, int]] = [(x, y), (x - 1, y), (x - 2, y)]
         self.direction = (1, 0)
         self.alive = True
-        self.color = (255, 140, 90)
+        self.hunter = hunter  # Hunter event: chases the player's head instead of food
+        self.move_phase = 0
+        self.color = (255, 70, 70) if hunter else (255, 140, 90)
 
     @property
     def head(self) -> Tuple[int, int]:

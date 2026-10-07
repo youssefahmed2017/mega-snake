@@ -102,6 +102,21 @@ mode/lifetime totals) and again in `_finalize_game_over`; event-based ones (`lam
 with `Game._unlock(id)`. Lambdas for new achievements should use `s.get(...)` since not every key exists in
 every check. Progress bars read `stat_bests`, so a new `stat_key` must also reach `update_stat_bests`.
 
+### Chaos events and perks — `events.py`
+`events.py` is pure logic (no pygame): `EVENTS` (Food Frenzy, Gold Rush, Blackout, Mirror Mode, Hunter,
+Earthquake), `EventDirector` (idle -> warn -> active scheduler) and `PERKS` + `roll_perk_choices`. All randomness
+comes from the rng you hand the director, never from elapsed time, so Daily seeds it with the date and every
+player gets the same schedule; Roguelite uses an unseeded one. Event rarity is `FIRST_EVENT_DELAY`/`EVENT_GAP`
+(~1 event per 1.5-2 min); keep them rare. `main.py` applies the effects: `_on_event`/`_end_event` (start/end
+hooks), `_draw_blackout`/`_draw_event_hud`, Hunter = an `EnemySnake(hunter=True)` in `self.rivals`, Frenzy food and
+Earthquake rubble are tracked (`Food.temp`, `Game.temp_obstacles`) so they clean up at event end. Modes opt in via
+`events=True` / `perks=True` in `MODE_CONFIG` (read with `.get`); both are solo-only (`reset_run` turns them off
+for LAN/Coop) because the host would otherwise have to stream them to guests. Perks (Roguelite, every
+`PERK_EVERY_FOODS` foods) open `STATE_PERK_PICK` (drawn over the frozen run like Paused); a perk's effect is
+either applied at pick time (`_choose_perk`) or read from `Game.perks` where it matters (`move_interval`,
+`_food_score`, magnet block, spawn rate, `_consume_save` for Shield/Second Wind). Pickup rarity (power-ups,
+downer-ups, portals) is per-second (`*_SPAWN_RATE` in `constants.py`, rolled with `dt`), not per frame.
+
 ### Multiplayer — authoritative host, dumb clients
 In both LAN and Online modes, **the host's `Game` instance is the only authoritative simulation**; every
 other connected player is a pure renderer that sends inputs upstream and applies snapshots sent back down.

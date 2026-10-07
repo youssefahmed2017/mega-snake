@@ -43,6 +43,8 @@ from constants import (
 )
 from snake import PlayerSnake
 from enemy import EnemySnake
+from events import (EventDirector, EVENTS, EVENT_FRENZY, EVENT_GOLD_RUSH, EVENT_BLACKOUT, EVENT_MIRROR,
+                    EVENT_HUNTER, EVENT_QUAKE, PERKS, PERK_EVERY_FOODS, roll_perk_choices, featured_event)
 from food import (
     Food, PowerUp, Downerup, spawn_food, maybe_spawn_powerup, maybe_spawn_downerup,
     maybe_spawn_portal_pair, random_free_cell,
@@ -160,6 +162,7 @@ STATE_UPDATE_DOWNLOAD = "update_download"
 STATE_UPDATE_ERROR = "update_error"
 STATE_EASTER_WARNING = "easter_warning"
 STATE_SECRET_SHOP = "secret_shop"
+STATE_PERK_PICK = "perk_pick"
 
 # After the run-ending death, the board stays up this long (frozen, with the
 # screen shake and death particles playing) before the Game Over screen.
@@ -273,7 +276,7 @@ class Game:
         resuming stay instant: they happen mid-run and a fade there would feel laggy."""
         old = self._state
         self._state = new
-        if (old is not None and old != new and STATE_PAUSED not in (old, new)
+        if (old is not None and old != new and STATE_PAUSED not in (old, new) and STATE_PERK_PICK not in (old, new)
                 and getattr(self, "settings", {}).get("transitions", True)):
             self._fade_from = screen.copy()  # still the last frame that was drawn
             self._fade_t = FADE_SECONDS
@@ -283,6 +286,13 @@ class Game:
         self.tracker = AchievementTracker(self.data.get("achievements", []))
         self.sounds = SoundBank()
         self.particles = ParticleSystem()
+        self.perks: Dict[str, int] = {}
+        self.event_director: Optional[EventDirector] = None
+        self.perk_choices: List[str] = []
+        self.perk_index = 0
+        self.perk_lives = 0
+        self.dash_cd = 0.0
+        self.temp_obstacles: set = set()
         self.pad_active = False  # last real input came from a pad (drives footer hints)
         self._pads: dict = {}  # device index -> open sdl_controller.Controller (must stay open to get events)
         self._stick_dir = {pygame.CONTROLLER_AXIS_LEFTX: 0, pygame.CONTROLLER_AXIS_LEFTY: 0}
@@ -1226,7 +1236,27 @@ class Game:
             wall_phases=0, time_alive=0.0,
             combo_peak=1, length_peak=len(self.player.body),
             powerups_collected=0, portals_used=0, near_misses=0,
+            events_survived=0, perks_picked=0,
         )
+
+        # Chaos events + roguelite perks (events.py). Solo runs only: the host would otherwise have
+        # to stream both to every guest. Daily seeds the event schedule so everyone gets the same one.
+        self.perks = {}
+        self.perk_choices = []
+        self.perk_index = 0
+        self.perks_offered = 0
+        self.perk_lives = 0
+        self.dash_cd = 0.0
+        self.temp_obstacles = set()
+        solo = self.lan_role is None and not cfg["coop"]
+        self.perks_on = bool(cfg.get("perks")) and solo
+        self.event_director = None
+        if cfg.get("events") and solo:
+            if cfg["seeded"]:
+                today = datetime.date.today().isoformat()
+                self.event_director = EventDirector(random.Random("events" + today), featured=featured_event(today))
+            else:
+                self.event_director = EventDirector(random.Random())
 
         # Ghost replay: single-snake local modes only. Coop has two snakes and a
         # LAN client doesn't simulate, so neither has one clean trail to record.
@@ -1268,8 +1298,158 @@ class Game:
             occ.add(self.portal_pair[1])
         return occ
 
-    def _spawn_food(self) -> None:
-        self.foods.append(spawn_food(self.occupied_cells()))
+    def _spawn_food(self, temp: bool = False, kind: Optional[str] = None) -> None:
+        f = spawn_food(self.occupied_cells())
+        if kind is not None:
+            f.kind = kind
+        elif self._event_active(EVENT_GOLD_RUSH):
+            f.kind = FOOD_GOLDEN
+        f.temp = temp
+        self.foods.append(f)
+
+    # ---------- chaos events & perks ----------
+
+    def _event_active(self, eid: str) -> bool:
+        d = self.event_director
+        return bool(d and d.active == eid)
+
+    def _food_score(self, value: float) -> int:
+        return int(round(value * (1 + 0.25 * self.perks.get("gourmet", 0))))
+
+    def _on_event(self, kind: str, eid: str) -> None:
+        ev = EVENTS[eid]
+        if kind == "warn":
+            self.sounds.play(self.sounds.portal)
+            return
+        if kind == "end":
+            self._end_event(eid)
+            return
+        self._announce(ev.name + "!", ev.color, life=1.8)
+        self.sounds.play(self.sounds.unlock)
+        if eid == EVENT_FRENZY:
+            for _ in range(7):
+                self._spawn_food(temp=True, kind=FOOD_NORMAL)
+        elif eid == EVENT_GOLD_RUSH:
+            for f in self.foods:
+                f.kind = FOOD_GOLDEN
+        elif eid == EVENT_MIRROR:
+            self.curse_timer = max(self.curse_timer, ev.duration)
+        elif eid == EVENT_HUNTER:
+            self._spawn_hunter()
+        elif eid == EVENT_QUAKE:
+            self.shake(0.9, 9)
+            self._rumble(0.9, 0.6, 500)
+            self._drop_rubble()
+
+    def _end_event(self, eid: str) -> None:
+        self.stats["events_survived"] += 1
+        color = EVENTS[eid].color
+        if eid == EVENT_FRENZY:
+            for f in [f for f in self.foods if f.temp]:
+                self.foods.remove(f)
+                self.particles.burst(*grid_to_px(*self._center((f.x, f.y))), color, count=6)
+        elif eid == EVENT_MIRROR:
+            self.curse_timer = 0.0
+        elif eid == EVENT_HUNTER:
+            for r in self.rivals:
+                if r.hunter:
+                    self.particles.burst(*grid_to_px(*self._center(r.head)), color, count=18)
+            self.rivals = [r for r in self.rivals if not r.hunter]
+        elif eid == EVENT_QUAKE:
+            for cell in self.temp_obstacles:
+                self.particles.burst(*grid_to_px(*self._center(cell)), color, count=5)
+            self.obstacles -= self.temp_obstacles
+            self.temp_obstacles = set()
+
+    def _spawn_hunter(self) -> None:
+        hx, hy = self.player.head
+        occ = self.occupied_cells()
+        corners = [(GRID_W - 5, GRID_H - 5), (4, 4), (GRID_W - 5, 4), (4, GRID_H - 5)]
+        corners.sort(key=lambda c: -(abs(c[0] - hx) + abs(c[1] - hy)))  # start as far from you as possible
+        for cx, cy in corners:
+            if not {(cx, cy), (cx - 1, cy), (cx - 2, cy)} & occ:
+                self.rivals.append(EnemySnake(cx, cy, hunter=True))
+                self.particles.burst(*grid_to_px(*self._center((cx, cy))), EVENTS[EVENT_HUNTER].color, count=20)
+                return
+
+    def _drop_rubble(self) -> None:
+        hx, hy = self.player.head
+        occ = self.occupied_cells()
+        placed = 0
+        for _ in range(300):
+            if placed >= 12:
+                break
+            cell = random_free_cell(occ)
+            if abs(cell[0] - hx) + abs(cell[1] - hy) < 5 or cell in occ:
+                continue  # never land where you can't react
+            occ.add(cell)
+            self.obstacles.add(cell)
+            self.temp_obstacles.add(cell)
+            self.particles.burst(*grid_to_px(*self._center(cell)), EVENTS[EVENT_QUAKE].color, count=8)
+            placed += 1
+
+    def _consume_save(self, tag: str) -> bool:
+        """A Shield or a Second Wind charge turns one fatal hit into a clutch save."""
+        if POWERUP_SHIELD in self.active_powerups:
+            del self.active_powerups[POWERUP_SHIELD]
+        elif tag == "p1" and self.perk_lives > 0:
+            self.perk_lives -= 1
+        else:
+            return False
+        self.shake(0.2, 4)
+        self._rumble(0.5, 0.6, 200)
+        self._announce("CLUTCH SAVE!", GREEN)
+        return True
+
+    def _hunter_check(self, hunter: EnemySnake) -> None:
+        if not hunter.alive or not self.player_alive or POWERUP_GHOST in self.active_powerups:
+            return
+        if hunter.head not in set(self.player.body):
+            return
+        if self._consume_save("p1"):
+            hunter.alive = False  # the hunter is spent after being fended off
+            self.particles.burst(*grid_to_px(*self._center(hunter.head)), EVENTS[EVENT_HUNTER].color, count=24)
+        else:
+            self._kill_snake("p1", "The hunter snake caught you.")
+
+    def _maybe_offer_perk(self) -> None:
+        if not self.perks_on or self.state != STATE_PLAYING:
+            return
+        due = self.stats["food_eaten"] // PERK_EVERY_FOODS
+        if due <= self.perks_offered:
+            return
+        self.perks_offered = due
+        choices = roll_perk_choices(random, self.perks)
+        if not choices:
+            return
+        self.perk_choices = choices
+        self.perk_index = 0
+        self.sounds.play(self.sounds.achievement)
+        self.state = STATE_PERK_PICK
+
+    def _choose_perk(self, i: int) -> None:
+        if not 0 <= i < len(self.perk_choices):
+            return
+        pid = self.perk_choices[i]
+        self.perks[pid] = self.perks.get(pid, 0) + 1
+        self.stats["perks_picked"] += 1
+        if pid == "second_wind":
+            self.perk_lives += 1
+        elif pid == "combo_keeper":
+            self.combo_window = 2.6 + self.perks[pid]
+        self._announce(PERKS[pid].name.upper(), PERKS[pid].color, life=1.4)
+        self.sounds.play(self.sounds.unlock)
+        self.perk_choices = []
+        self.move_accum = 0.0
+        self.state = STATE_PLAYING
+
+    def _try_dash(self) -> None:
+        if not self.perks.get("dash") or self.dash_cd > 0 or not self.player_alive or self.death_pause_timer > 0:
+            return
+        self.active_powerups[POWERUP_GHOST] = max(self.active_powerups.get(POWERUP_GHOST, 0.0), 1.2)
+        self.dash_cd = 10.0
+        self.particles.burst(*grid_to_px(*self._center(self.player.head)), PERKS["dash"].color, count=16, speed=170)
+        self.sounds.play(self.sounds.portal)
 
     # ---------- update ----------
 
@@ -1282,6 +1462,7 @@ class Game:
             interval *= 0.55
         if POWERUP_SLOWMO in self.active_powerups:
             interval *= 1.7
+        interval *= 1 + 0.08 * self.perks.get("featherweight", 0)
         return max(0.03, interval)
 
     def update_playing(self, dt: float) -> None:
@@ -1338,6 +1519,12 @@ class Game:
         self.time_alive += dt
         self.stats["time_alive"] = self.time_alive
 
+        if self.event_director:
+            for kind, eid in self.event_director.update(dt):
+                self._on_event(kind, eid)
+        if self.dash_cd > 0:
+            self.dash_cd = max(0.0, self.dash_cd - dt)
+
         if self.time_remaining is not None:
             self.time_remaining -= dt
             if self.time_remaining <= 0:
@@ -1371,7 +1558,10 @@ class Game:
         for kind in expired:
             del self.active_powerups[kind]
 
-        if POWERUP_MAGNET in self.active_powerups:
+        magnet_r = 3 if POWERUP_MAGNET in self.active_powerups else 0
+        if self.perks.get("magnet_field"):
+            magnet_r = max(magnet_r, 1 + self.perks["magnet_field"])
+        if magnet_r:
             for f in list(self.foods):
                 heads = []
                 if self.player_alive:
@@ -1379,7 +1569,7 @@ class Game:
                 if self.player2 and self.player2_alive:
                     heads.append(self.player2.head)
                 for hx, hy in heads:
-                    if abs(f.x - hx) + abs(f.y - hy) <= 3:
+                    if abs(f.x - hx) + abs(f.y - hy) <= magnet_r:
                         self._consume_food(f, self.player, auto=True)
                         break
 
@@ -1399,7 +1589,8 @@ class Game:
                 self.powerups.remove(p)
 
         cfg = self.mode_cfg()
-        new_p = maybe_spawn_powerup(self.occupied_cells(), self.powerups, cfg["powerups"], dt)
+        new_p = maybe_spawn_powerup(self.occupied_cells(), self.powerups, cfg["powerups"],
+                                  dt * (1 + self.perks.get("lucky_charm", 0)))
         if new_p:
             self.powerups.append(new_p)
 
@@ -1722,15 +1913,11 @@ class Game:
             nx, ny = snake.head
             died, reason = self._check_collision(tag, snake, nx, ny, ghost, cfg)
             if died:
-                if POWERUP_SHIELD in self.active_powerups:
-                    del self.active_powerups[POWERUP_SHIELD]
+                if self._consume_save(tag):
                     snake.body[0] = prev_heads[tag]
                     snake.prev_body = list(snake.body)
                     ppx, ppy = grid_to_px(*self._center(snake.head))
                     self.particles.burst(ppx, ppy, (120, 255, 190), count=20)
-                    self.shake(0.2, 4)
-                    self._rumble(0.5, 0.6, 200)
-                    self._announce("CLUTCH SAVE!", GREEN)
                 else:
                     self._kill_snake(tag, reason)
 
@@ -1759,24 +1946,38 @@ class Game:
             self.ghost_index += 1
 
         if self.rivals and POWERUP_FREEZE not in self.active_powerups:
-            for rival in self.rivals:
+            for rival in list(self.rivals):
                 if not rival.alive:
                     continue
-                target = (self.foods[0].x, self.foods[0].y) if self.foods else rival.head
+                if rival.hunter:
+                    rival.move_phase = (rival.move_phase + 1) % 3
+                    if rival.move_phase == 0:
+                        continue  # a hunter only moves 2 ticks in 3, so it can be outrun
+                    target = self.player.head if self.player_alive else rival.head
+                else:
+                    target = (self.foods[0].x, self.foods[0].y) if self.foods else rival.head
                 blocked = set(self.obstacles)
                 for other in self.rivals:
                     if other is not rival and other.alive:
                         blocked |= other.occupies()
                 rival.choose_direction(target, blocked)
                 grow = False
-                for f in list(self.foods):
+                for f in ([] if rival.hunter else list(self.foods)):
                     ehx = rival.head[0] + rival.direction[0]
                     ehy = rival.head[1] + rival.direction[1]
                     if (f.x, f.y) == (ehx, ehy):
                         self.foods.remove(f)
-                        self._spawn_food()
+                        if not f.temp:
+                            self._spawn_food()
                         grow = True
                 rival.step(grow)
+                if rival.hunter:
+                    self._hunter_check(rival)
+            self.rivals = [r for r in self.rivals if r.alive or not r.hunter]
+
+        if self._event_active(EVENT_FRENZY):
+            for _ in range(max(0, 5 - sum(1 for f in self.foods if f.temp))):
+                self._spawn_food(temp=True, kind=FOOD_NORMAL)
 
     def _snake_alive(self, tag: str) -> bool:
         return self.players_alive[PTAGS.index(tag)]
@@ -1845,7 +2046,7 @@ class Game:
             self.combo = min(20, self.combo + 1)
             self.combo_timer = self.combo_window
             base = 10 * self.combo
-            gained = base * mult
+            gained = self._food_score(base * mult)
             self.score += gained
             self.score_breakdown["normal"] += base
             self.score_breakdown["mult_bonus"] += gained - base
@@ -1859,10 +2060,11 @@ class Game:
             snake.grow(1)
             self.combo = min(20, self.combo + 1)
             self.combo_timer = self.combo_window
-            gained = 50 * mult
+            gbase = 100 if self._event_active(EVENT_GOLD_RUSH) else 50
+            gained = self._food_score(gbase * mult)
             self.score += gained
-            self.score_breakdown["golden"] += 50
-            self.score_breakdown["mult_bonus"] += gained - 50
+            self.score_breakdown["golden"] += gbase
+            self.score_breakdown["mult_bonus"] += gained - gbase
             self.stats["food_eaten"] += 1
             self.stats["golden_eaten"] += 1
             self.sounds.play(self.sounds.golden)
@@ -1876,7 +2078,7 @@ class Game:
         elif f.kind == FOOD_SPEED:
             snake.grow(1)
             self.speed_boost_timer = 4.0
-            gained = 10 * mult
+            gained = self._food_score(10 * mult)
             self.score += gained
             self.score_breakdown["normal"] += 10
             self.score_breakdown["mult_bonus"] += gained - 10
@@ -1894,7 +2096,9 @@ class Game:
             self.particles.burst(px, py, self.food_color(FOOD_SHRINK), count=12)
             self._spawn_score_popup(px, py, "-5", DANGER)
 
-        self._spawn_food()
+        if not f.temp:
+            self._spawn_food()
+        self._maybe_offer_perk()
 
     def _consume_downerup(self, tag: str, d: Downerup) -> None:
         """Bomb/curse: these are downerups (hazard power-ups), not food - see
@@ -1913,8 +2117,11 @@ class Game:
             self._spawn_score_popup(px, py, "-5", DANGER)
 
         elif d.kind == DOWNERUP_BOMB:
-            if POWERUP_SHIELD in self.active_powerups:
-                del self.active_powerups[POWERUP_SHIELD]
+            if POWERUP_SHIELD in self.active_powerups or (tag == "p1" and self.perk_lives > 0):
+                if POWERUP_SHIELD in self.active_powerups:
+                    del self.active_powerups[POWERUP_SHIELD]
+                else:
+                    self.perk_lives -= 1
                 self.stats["bombs_survived"] = self.stats.get("bombs_survived", 0) + 1
                 self.particles.burst(px, py, (120, 255, 190), count=20)
                 self.shake(0.25, 5)
@@ -1976,7 +2183,7 @@ class Game:
         persistence.update_stat_bests(self.data, final)
         persistence.add_run_history(self.data, self.score, self.mode_name(), today_iso)
 
-        self.run_coins_earned = max(0, self.score // 10)
+        self.run_coins_earned = max(0, int(self.score // 10 * (1 + 0.5 * self.perks.get("midas", 0))))
         self.wallet += self.run_coins_earned
         streak_bonus = persistence.apply_daily_streak(self.data, today_iso, yesterday_iso)
         self.run_streak_bonus = streak_bonus or 0
@@ -2588,10 +2795,12 @@ class Game:
             gfx.draw.circle(board, self.powerup_color(POWERUP_SHIELD), (int(cx), int(cy)), CELL_SIZE, width=2)
 
         self.particles.draw(board)
+        self._draw_blackout(board, alpha)
         self._draw_score_popups(board)
         self._draw_near_miss_flash(board)
         self._draw_wall_vignette(board)
         self._draw_announcer(board)
+        self._draw_event_hud(board)
 
         self._draw_backdrop(0.8)  # shows in the strips above/below the board
         frame = pygame.Rect(-3, BOARD_Y - 3, GRID_W * CELL_SIZE + 6, GRID_H * CELL_SIZE + 6)
@@ -2607,6 +2816,107 @@ class Game:
             screen.blit(scaled, (ox - dx, oy + BOARD_Y - dy))
         else:
             screen.blit(board, (ox, oy + BOARD_Y))
+
+    def _draw_blackout(self, board: pygame.Surface, alpha: float) -> None:
+        d = self.event_director
+        if not (d and d.active == EVENT_BLACKOUT and self.player_alive):
+            return
+        fade = max(0.0, min(1.0, EVENTS[EVENT_BLACKOUT].duration - d.remaining, d.remaining))  # 1s in, 1s out
+        w, h = board.get_size()
+        dark = gfx.surface((w, h), pygame.SRCALPHA)
+        base = int(240 * fade)
+        dark.fill((4, 6, 14, base))
+        hx, hy = self.player.render_positions(alpha)[0]
+        cx, cy = int(hx * CELL_SIZE + CELL_SIZE // 2), int(hy * CELL_SIZE + CELL_SIZE // 2)
+        reach, steps = CELL_SIZE * 6, 16
+        for i in range(steps):  # concentric discs, clear in the middle, fully dark at the rim
+            frac = 1 - i / steps
+            gfx.draw.circle(dark, (4, 6, 14, int(base * frac ** 1.6)), (cx, cy), max(1, int(reach * frac)))
+        board.blit(dark, (0, 0))
+
+    def _draw_event_hud(self, board: pygame.Surface) -> None:
+        d = self.event_director
+        if not d or not (d.active or d.incoming):
+            return
+        w = board.get_width()
+        if d.active:
+            ev = EVENTS[d.active]
+            text, frac = f"{ev.name}  {d.remaining:0.0f}s", d.remaining / ev.duration
+            color = ev.color
+        else:
+            ev = EVENTS[d.incoming]
+            text, frac = f"INCOMING: {ev.name}  {d.warn_left:0.0f}", None
+            color = ev.color if int(pygame.time.get_ticks() / 250) % 2 == 0 else TEXT
+        label = font_small.render(text, True, color)
+        pill = pygame.Rect(w // 2 - (label.get_width() + 32) // 2, 6, label.get_width() + 32, 30)
+        gfx.draw.rect(board, (10, 12, 20), pill, border_radius=8)
+        gfx.draw.rect(board, ev.color, pill, width=2, border_radius=8)
+        board.blit(label, (pill.x + 16, pill.y + (pill.height - label.get_height()) // 2))
+        if frac is not None:
+            bar = pygame.Rect(pill.x + 8, pill.bottom - 6, int((pill.width - 16) * frac), 3)
+            gfx.draw.rect(board, ev.color, bar, border_radius=1)
+
+    def _wrap_px(self, text: str, font: pygame.font.Font, max_w: int) -> List[str]:
+        lines, cur = [], ""
+        for word in text.split():
+            trial = f"{cur} {word}".strip()
+            if cur and font.size(trial)[0] > max_w:
+                lines.append(cur)
+                cur = word
+            else:
+                cur = trial
+        return lines + ([cur] if cur else [])
+
+    def draw_perk_pick(self) -> None:
+        overlay = gfx.surface((SCREEN_W, SCREEN_H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 185))
+        screen.blit(overlay, (0, 0))
+        play_cx = GRID_W * CELL_SIZE // 2
+        title = font_big.render("CHOOSE A PERK", True, TEXT)
+        screen.blit(title, (play_cx - title.get_width() // 2, SCREEN_H // 2 - 170))
+
+        n = len(self.perk_choices)
+        card_w, card_h, gap = 224, 170, 16
+        x0 = play_cx - (n * card_w + (n - 1) * gap) // 2
+        top = SCREEN_H // 2 - 100
+        for i, pid in enumerate(self.perk_choices):
+            perk = PERKS[pid]
+            card = pygame.Rect(x0 + i * (card_w + gap), top, card_w, card_h)
+            selected = i == self.perk_index
+            gfx.draw.rect(screen, (22, 26, 38) if selected else (14, 17, 26), card, border_radius=12)
+            gfx.draw.rect(screen, perk.color if selected else (70, 78, 98), card, width=3 if selected else 1,
+                          border_radius=12)
+            self._hot(card, "perk_index", i, lambda: self._press(pygame.K_RETURN))
+            have = self.perks.get(pid, 0)
+            badge = font_tiny.render(f"[{i + 1}]   " + (f"Level {have} -> {have + 1}" if have else "NEW"), True,
+                                     perk.color)
+            screen.blit(badge, (card.x + 14, card.y + 12))
+            name_lines = self._wrap_px(perk.name, font_mid, card_w - 28)
+            ny = card.y + 40
+            for line in name_lines:
+                screen.blit(font_mid.render(line, True, TEXT), (card.x + 14, ny))
+                ny += 30
+            for line in self._wrap_px(perk.desc, font_tiny, card_w - 28):
+                screen.blit(font_tiny.render(line, True, TEXT_DIM), (card.x + 14, ny + 6))
+                ny += 18
+        foot = font_tiny.render(self._hint("Left / Right + Enter, or press 1 2 3   (or click)"), True, TEXT_DIM)
+        screen.blit(foot, (play_cx - foot.get_width() // 2, top + card_h + 24))
+
+    def handle_perk_pick_key(self, key) -> None:
+        n = len(self.perk_choices)
+        if not n:
+            self.state = STATE_PLAYING
+            return
+        if key in (pygame.K_LEFT, pygame.K_a, pygame.K_UP, pygame.K_h, pygame.K_k):
+            self.perk_index = (self.perk_index - 1) % n
+            self.sounds.play(self.sounds.menu_move)
+        elif key in (pygame.K_RIGHT, pygame.K_d, pygame.K_DOWN, pygame.K_l, pygame.K_j):
+            self.perk_index = (self.perk_index + 1) % n
+            self.sounds.play(self.sounds.menu_move)
+        elif key in (pygame.K_1, pygame.K_2, pygame.K_3):
+            self._choose_perk(key - pygame.K_1)
+        elif key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+            self._choose_perk(self.perk_index)
 
     def draw_sidebar(self) -> None:
         panel = pygame.Rect(GRID_W * CELL_SIZE, 0, SIDEBAR_W, SCREEN_H)
@@ -2689,6 +2999,22 @@ class Game:
                 screen.blit(font_tiny.render(f"{kind}  {remaining:0.1f}s", True, TEXT), (x + 20, y))
                 y += 18
             y += 6
+
+        if self.perks_on:
+            left = PERK_EVERY_FOODS - self.stats["food_eaten"] % PERK_EVERY_FOODS
+            screen.blit(font_tiny.render(f"Next perk in {left} food", True, TEXT_DIM), (x, y))
+            y += 18
+            for pid, n in self.perks.items():
+                if y > SCREEN_H - 150:
+                    break
+                if pid == "second_wind":
+                    label = f"Second Wind: {self.perk_lives} left"
+                elif pid == "dash":
+                    label = "Phase Dash: ready" if self.dash_cd <= 0 else f"Phase Dash: {self.dash_cd:0.0f}s"
+                else:
+                    label = PERKS[pid].name + (f" x{n}" if n > 1 else "")
+                screen.blit(font_tiny.render(label, True, PERKS[pid].color), (x, y))
+                y += 16
 
         y = SCREEN_H - 130
         if self.lan_role:
@@ -2800,6 +3126,8 @@ class Game:
                 self._list_row(row, "menu_index", i)
 
         desc = MODE_DESC[self.mode_name()]
+        if self.mode_name() == "Daily":
+            desc += f"  Today: {EVENTS[featured_event(datetime.date.today().isoformat())].name} DAY"
         desc_r = font_tiny.render(desc, True, TEXT_DIM)
         screen.blit(desc_r, (SCREEN_W // 2 - desc_r.get_width() // 2, start_y + len(items) * line_h + 8))
 
@@ -2953,6 +3281,15 @@ class Game:
             f"Max length: {self.final_stats.get('length', 0)}",
             f"Time alive: {self.final_stats.get('time_alive', 0):.1f}s",
         ]
+        if self.event_director:
+            stats_lines.append(f"Events survived: {self.final_stats.get('events_survived', 0)}")
+        if self.perks_on:
+            names = [PERKS[p].name + (f" x{n}" if n > 1 else "") for p, n in self.perks.items()]
+            line = "Perks: " + (", ".join(names) or "none")
+            while len(names) > 1 and font_small.size(line)[0] > 500:
+                names.pop()
+                line = "Perks: " + ", ".join(names) + ", ..."
+            stats_lines.append(line)
         y = y0
         screen.blit(font_small.render("RUN STATS", True, ACCENT), (left_x, y)); y += 26
         for line in stats_lines:
@@ -2977,7 +3314,7 @@ class Game:
         text = font_small.render(f"Total: {total}", True, GOLD)
         screen.blit(text, (right_x, y + 6))
 
-        coin_y = y0 + 5 * 26 + 46
+        coin_y = y0 + max(5, len(stats_lines)) * 26 + 46
         coin_line = f"Coins earned: +{self.run_coins_earned}"
         if self.run_streak_bonus:
             coin_line += f"   Streak bonus: +{self.run_streak_bonus} ({self.streak_count} day streak)"
@@ -4558,6 +4895,8 @@ class Game:
                 self._host_end_session()
             else:
                 self.state = STATE_MENU
+        elif key == pygame.K_SPACE:
+            self._try_dash()
         elif key == pygame.K_m:
             self.sounds.muted = not self.sounds.muted
             self.save_settings()
@@ -4697,7 +5036,7 @@ class Game:
         elif st == STATE_PLAYING:
             pass
         elif st not in (STATE_UPDATE_CHECK, STATE_UPDATE_DOWNLOAD, STATE_EASTER_WARNING,
-                        STATE_ENTER_INITIALS, STATE_MENU):
+                        STATE_ENTER_INITIALS, STATE_MENU, STATE_PERK_PICK):
             self._press(pygame.K_ESCAPE)
 
     def _handle_mouse(self, event: pygame.event.Event) -> None:
@@ -4764,6 +5103,7 @@ class Game:
         ("Esc: back", "B: back"),
         ("Right-click or P to resume   Esc menu", "Start or B: resume   Select: menu"),
         ("M mute  |  Esc menu", "Start: pause"),
+        ("Left / Right + Enter, or press 1 2 3   (or click)", "D-pad + A to choose"),
     )
 
     def _hint(self, text: str) -> str:
@@ -4786,7 +5126,7 @@ class Game:
         out (but never abandons a run from Playing), and Playing only accepts steering."""
         st = self.state
         if key == pygame.K_ESCAPE:
-            if st == STATE_PLAYING or st == STATE_MENU:
+            if st in (STATE_PLAYING, STATE_MENU, STATE_PERK_PICK):
                 return
             if st == STATE_PAUSED:
                 key = pygame.K_p
@@ -4794,7 +5134,7 @@ class Game:
             if st not in (STATE_PLAYING, STATE_PAUSED) or self.lan_role == "client":
                 key = pygame.K_RETURN
         elif key == pygame.K_RETURN and st == STATE_PLAYING:
-            return
+            key = pygame.K_SPACE  # A = Phase Dash (does nothing without the perk)
         self._press(key)
         self.pad_active = True
 
@@ -4885,6 +5225,8 @@ class Game:
             self.handle_playing_key(key)
         elif self.state == STATE_PAUSED:
             self.handle_pause_key(key)
+        elif self.state == STATE_PERK_PICK:
+            self.handle_perk_pick_key(key)
         elif self.state == STATE_SETTINGS:
             self.handle_settings_key(key)
         elif self.state == STATE_SHOP:
@@ -4994,6 +5336,10 @@ class Game:
             self.draw_playing(1.0)
             self.draw_sidebar()
             self.draw_paused()
+        elif self.state == STATE_PERK_PICK:
+            self.draw_playing(1.0)
+            self.draw_sidebar()
+            self.draw_perk_pick()
         elif self.state == STATE_MENU:
             self.draw_menu()
         elif self.state == STATE_GAME_OVER:

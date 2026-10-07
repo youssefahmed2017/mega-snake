@@ -56,6 +56,12 @@ ACHIEVEMENTS: List[Achievement] = [
     Achievement("beat_the_clock", "Beat the Clock", "Score 150 in Timed mode", lambda s: s.get("mode") == "Timed" and s["score"] >= 150),
     Achievement("hardcore_100", "No Safety Net", "Score 100 in Hardcore mode", lambda s: s.get("mode") == "Hardcore" and s["score"] >= 100),
     Achievement("daily_driver", "Daily Driver", "Score 50 in a Daily run", lambda s: s.get("mode") == "Daily" and s["score"] >= 50),
+    Achievement("chaos_survivor", "Chaos Survivor", "Live through 3 chaos events in one run",
+                lambda s: s.get("events_survived", 0) >= 3),
+    Achievement("fully_loaded", "Fully Loaded", "Pick 5 perks in one Roguelite run",
+                lambda s: s.get("perks_picked", 0) >= 5),
+    Achievement("roguelite_150", "Build Master", "Score 150 in Roguelite mode",
+                lambda s: s.get("mode") == "Roguelite" and s["score"] >= 150),
 
     # --- long-term progress ---
     Achievement("regular", "Regular", "Play 10 games", lambda s: s.get("lifetime_games", 0) >= 10, "lifetime_games", 10),

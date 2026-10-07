@@ -150,11 +150,12 @@ POWERUP_DURATIONS = {
 
 CURSE_DURATION = 4.5
 
-MODES = ["Classic", "Walls", "Maze", "Battle", "Timed", "Hardcore", "Coop", "Daily"]
+MODES = ["Classic", "Walls", "Maze", "Battle", "Timed", "Hardcore", "Coop", "Daily", "Roguelite"]
 
 # wrap: edges wrap instead of killing. powerups: power-ups spawn. obstacles: maze-style
 # growth. rivals: number of AI rival snakes. timer: seconds for a countdown mode (or None).
-# coop: local two-player. seeded: today's date seeds the initial layout.
+# coop: local two-player. seeded: today's date seeds the initial layout. events / perks
+# (optional, default off): chaos events during the run / a perk pick every few foods.
 MODE_CONFIG = {
     "Classic": dict(wrap=True, powerups=True, obstacles=False, rivals=0, timer=None, coop=False, seeded=False, speed_mult=1.0),
     "Walls": dict(wrap=False, powerups=True, obstacles=False, rivals=0, timer=None, coop=False, seeded=False, speed_mult=1.0),
@@ -163,7 +164,10 @@ MODE_CONFIG = {
     "Timed": dict(wrap=True, powerups=True, obstacles=False, rivals=0, timer=60, coop=False, seeded=False, speed_mult=1.0),
     "Hardcore": dict(wrap=False, powerups=False, obstacles=True, rivals=0, timer=None, coop=False, seeded=False, speed_mult=1.35),
     "Coop": dict(wrap=False, powerups=True, obstacles=False, rivals=0, timer=None, coop=True, seeded=False, speed_mult=1.0),
-    "Daily": dict(wrap=False, powerups=True, obstacles=True, rivals=0, timer=None, coop=False, seeded=True, speed_mult=1.0),
+    "Daily": dict(wrap=False, powerups=True, obstacles=True, rivals=0, timer=None, coop=False, seeded=True, speed_mult=1.0,
+                  events=True),
+    "Roguelite": dict(wrap=False, powerups=True, obstacles=False, rivals=0, timer=None, coop=False, seeded=False,
+                      speed_mult=1.0, events=True, perks=True),
 }
 
 MODE_DESC = {
@@ -174,7 +178,8 @@ MODE_DESC = {
     "Timed": "60 second score attack. Wraps around.",
     "Hardcore": "No power-ups. Faster ramp. One life.",
     "Coop": "Local 2-player. Arrows + WASD, shared board.",
-    "Daily": "Same seeded layout for everyone, today only.",
+    "Daily": "Same layout and chaos events for everyone, today only.",
+    "Roguelite": "Walls + chaos events. Pick a perk every 8 foods.",
 }
 
 # LAN match setup: the host picks a ruleset (wrap/obstacle behavior) and a map
@@ -398,6 +403,20 @@ ONLINE_SERVER_URL = "wss://megasnake-online.megasnake-online.workers.dev"
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("3.2.0", [
+        "Chaos events: rare mid-run surprises with a 3 second warning -",
+        "  Food Frenzy, Gold Rush, Blackout, Mirror Mode, Hunter, Earthquake",
+        "New Roguelite mode: Walls + chaos events, and a pick-1-of-3 perk",
+        "  every 8 foods (Second Wind, Magnet Field, Gourmet, Midas Touch,",
+        "  Featherweight, Lucky Charm, Combo Keeper, Phase Dash)",
+        "Daily now has chaos events too - the same ones, at the same time, for",
+        "  everyone - and a 'featured event' of the day shown on mode select",
+        "Power-ups, downer-ups, portals and golden food are now much rarer",
+        "  (and no longer depend on your frame rate)",
+        "Gamepad support: D-pad/stick, A/B/Start/Select, rumble, and a new",
+        "  Settings > Controller tab",
+        "Multiplayer now works across game versions (1.9.2 and newer)",
+    ]),
     ("2.0.0", [
         "A pass on how the game FEELS to play, not just what it can do:",
         "- Eating pops a floating +10/-5 at the tile, and chained eats climb",
