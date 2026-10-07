@@ -106,13 +106,15 @@ jobs:
       ITCH_TARGET: ${{ vars.ITCH_TARGET }}
       BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
     steps:
+      - uses: actions/checkout@v4  # only to read GAME_VERSION below
+
       - uses: actions/download-artifact@v4
         with:
           path: itch
 
       - name: Install butler (itch.io's official uploader)
         run: |
-          curl -fsSL -o butler.zip https://broth.itch.ovh/butler/linux-amd64/LATEST/archive/default
+          curl -fsSL -o butler.zip https://broth.itch.zone/butler/linux-amd64/LATEST/archive/default
           unzip -q butler.zip -d butler
           chmod +x butler/butler
           echo "$PWD/butler" >> "$GITHUB_PATH"
@@ -123,11 +125,9 @@ jobs:
             echo "::error::Add the BUTLER_API_KEY repository secret first (see itch/PAGE.md)."
             exit 1
           fi
-          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
-            version="${GITHUB_REF_NAME#v}"
-          else
-            version="$(date +%Y.%m.%d)-${GITHUB_SHA::7}"
-          fi
+          version="$(sed -n 's/^GAME_VERSION = "\(.*\)"/\1/p' constants.py)"
+          test -n "$version" || { echo "::error::Could not read GAME_VERSION from constants.py"; exit 1; }
+          echo "Publishing version $version"
           for channel in windows osx linux; do
             butler push --if-changed "itch/itch-$channel/MegaSnake-itch-$channel.zip" "$ITCH_TARGET:$channel" --userversion "$version"
           done
