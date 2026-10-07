@@ -55,12 +55,17 @@ FOOD_GOLDEN = "golden"
 FOOD_SPEED = "speed"
 FOOD_SHRINK = "shrink"
 
-FOOD_WEIGHTS = {
-    FOOD_NORMAL: 56,
-    FOOD_GOLDEN: 10,
-    FOOD_SPEED: 10,
-    FOOD_SHRINK: 8,
+FOOD_WEIGHTS = {  # golden ~3% of food, the special kinds ~6% each - they should feel like finds
+    FOOD_NORMAL: 85,
+    FOOD_GOLDEN: 3,
+    FOOD_SPEED: 6,
+    FOOD_SHRINK: 6,
 }
+
+# Pickup spawn rates, in expected spawns per second while under the on-field cap. Rolled
+# with dt each frame so they don't depend on the frame rate.
+POWERUP_SPAWN_RATE = 1 / 25
+PORTAL_SPAWN_RATE = 1 / 20
 
 FOOD_COLORS = {
     FOOD_NORMAL: (255, 90, 90),
@@ -85,7 +90,7 @@ DOWNERUP_COLORS = {
 
 # Downerups spawn independently of (and rarer than) power-ups, and only one
 # is ever on the field at a time - see maybe_spawn_downerup() in food.py.
-DOWNERUP_SPAWN_CHANCE = 0.006
+DOWNERUP_SPAWN_RATE = 1 / 40
 DOWNERUP_TTL = 10.0
 
 POWERUP_GHOST = "ghost"

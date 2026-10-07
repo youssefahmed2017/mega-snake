@@ -1399,7 +1399,7 @@ class Game:
                 self.powerups.remove(p)
 
         cfg = self.mode_cfg()
-        new_p = maybe_spawn_powerup(self.occupied_cells(), self.powerups, cfg["powerups"])
+        new_p = maybe_spawn_powerup(self.occupied_cells(), self.powerups, cfg["powerups"], dt)
         if new_p:
             self.powerups.append(new_p)
 
@@ -1410,7 +1410,7 @@ class Game:
             d.ttl -= dt
             if d.ttl <= 0:
                 self.downerups.remove(d)
-        new_d = maybe_spawn_downerup(self.occupied_cells(), self.downerups, cfg["powerups"])
+        new_d = maybe_spawn_downerup(self.occupied_cells(), self.downerups, cfg["powerups"], dt)
         if new_d:
             self.downerups.append(new_d)
 
@@ -1421,7 +1421,7 @@ class Game:
                 self.powerups.append(PowerUp(rx, ry, POWERUP_REVIVE))
 
         if not self.portal_pair:
-            pair = maybe_spawn_portal_pair(self.occupied_cells())
+            pair = maybe_spawn_portal_pair(self.occupied_cells(), dt)
             if pair:
                 self.portal_pair = pair
 

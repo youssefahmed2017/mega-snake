@@ -9,7 +9,7 @@ from constants import (
     FOOD_WEIGHTS, GRID_W, GRID_H,
     POWERUP_GHOST, POWERUP_MAGNET, POWERUP_SHIELD, POWERUP_SLOWMO, POWERUP_MULT,
     POWERUP_FREEZE, POWERUP_TELEPORT,
-    DOWNERUP_TYPES, DOWNERUP_SPAWN_CHANCE, DOWNERUP_TTL,
+    DOWNERUP_TYPES, DOWNERUP_SPAWN_RATE, DOWNERUP_TTL, POWERUP_SPAWN_RATE, PORTAL_SPAWN_RATE,
 )
 
 POWERUP_TYPES = [
@@ -66,28 +66,31 @@ def spawn_food(occupied: Set[Tuple[int, int]], rng: random.Random = random) -> F
     return Food(x, y, kind)
 
 
-def maybe_spawn_powerup(occupied: Set[Tuple[int, int]], existing: List[PowerUp], enabled: bool) -> Optional[PowerUp]:
+def maybe_spawn_powerup(occupied: Set[Tuple[int, int]], existing: List[PowerUp], enabled: bool,
+                        dt: float) -> Optional[PowerUp]:
     if not enabled or len(existing) >= 2:
         return None
-    if random.random() > 0.012:
+    if random.random() > POWERUP_SPAWN_RATE * dt:
         return None
     kind = random.choice(POWERUP_TYPES)
     x, y = random_free_cell(occupied)
     return PowerUp(x, y, kind)
 
 
-def maybe_spawn_downerup(occupied: Set[Tuple[int, int]], existing: List[Downerup], enabled: bool) -> Optional[Downerup]:
+def maybe_spawn_downerup(occupied: Set[Tuple[int, int]], existing: List[Downerup], enabled: bool,
+                         dt: float) -> Optional[Downerup]:
     if not enabled or len(existing) >= 1:
         return None
-    if random.random() > DOWNERUP_SPAWN_CHANCE:
+    if random.random() > DOWNERUP_SPAWN_RATE * dt:
         return None
     kind = random.choice(DOWNERUP_TYPES)
     x, y = random_free_cell(occupied)
     return Downerup(x, y, kind)
 
 
-def maybe_spawn_portal_pair(occupied: Set[Tuple[int, int]]) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
-    if random.random() > 0.004:
+def maybe_spawn_portal_pair(occupied: Set[Tuple[int, int]],
+                            dt: float) -> Optional[Tuple[Tuple[int, int], Tuple[int, int]]]:
+    if random.random() > PORTAL_SPAWN_RATE * dt:
         return None
     a = random_free_cell(occupied)
     occupied = occupied | {a}
