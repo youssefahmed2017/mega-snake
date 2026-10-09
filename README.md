@@ -1,4 +1,11 @@
-# MEGA SNAKE
+# Mega Snake Game!
+
+<img width="1680" height="951" alt="image" src="https://github.com/user-attachments/assets/d27c2b40-d6b7-4105-b5ca-9ffd6a1d62b7" />
+<img width="1674" height="897" alt="image" src="https://github.com/user-attachments/assets/99325c16-65b8-4188-a2b9-b846dcec77a7" />
+<img width="1135" height="928" alt="image" src="https://github.com/user-attachments/assets/99153622-d791-4d2c-880d-acf272efa99a" />
+<img width="1680" height="919" alt="image" src="https://github.com/user-attachments/assets/58b1ad77-d978-4265-a6cc-5a6498a2d789" />
+<img width="1475" height="926" alt="image" src="https://github.com/user-attachments/assets/9088d858-3806-409b-bd71-65cc1adf7867" />
+
 
 Snake, but with way too many features: nine game modes, power-ups and downer-ups, chaos events, a roguelite
 perk mode, achievements and quests, gamepad support, and LAN or online multiplayer for up to four players.
