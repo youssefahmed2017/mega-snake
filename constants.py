@@ -463,7 +463,7 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "3.2.3"
+GAME_VERSION = "3.3.0"
 
 # Oldest version that may play multiplayer with this one. Different versions inside the
 # range play together; anything older is turned away. Raise it only when the network
@@ -482,6 +482,12 @@ ONLINE_SERVER_URL = "wss://megasnake-online.megasnake-online.workers.dev"
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("3.3.0", [
+        "New Arcade modes: Food Rush, Hunter Gauntlet, Maze Escape, and Reversed",
+        "Personal-best ghost replays in solo modes",
+        "More unlockable and purchasable skins, trails, and achievements",
+        "New mustache easter egg",
+    ]),
     ("3.2.3", [
         "Much smoother multiplayer (LAN and online):",
         "- The host's own snake no longer hops a cell at a time",
