@@ -29,6 +29,9 @@ DEFAULT_DATA = {
     "wallet": 0,
     "owned_trails": ["None"],
     "equipped_trail": "None",
+    "owned_skins": ["Classic"],  # shop-bought skins; achievement-unlocked ones don't need to be here
+    "arcade_unlocked": False,
+    "arcade_best": {},  # minigame name -> best score/time (see Game._finalize_arcade_run)
     "streak": {"count": 0, "last_played": None},
     "quests": {"date": None, "completed": []},  # today's completed quest ids
     "settings": dict(SETTING_DEFAULTS),

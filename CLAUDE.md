@@ -31,7 +31,7 @@ npm run deploy    # wrangler deploy
 Building a release binary locally (matches `.github/workflows/build.yml`):
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --windowed --collect-data certifi --add-data "assets/fonts:assets/fonts" --add-data "assets/art:assets/art" --name MegaSnake main.py   # use ';' not ':' on Windows
+pyinstaller --onefile --windowed --icon assets/icon.ico --collect-data certifi --add-data "assets/fonts:assets/fonts" --add-data "assets/art:assets/art" --name MegaSnake main.py   # use ';' not ':' on Windows; --icon assets/icon.icns on macOS
 ```
 
 ## License

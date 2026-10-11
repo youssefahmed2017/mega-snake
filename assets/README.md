@@ -6,6 +6,7 @@ Copyright (C) 2026 Youssef Ahmed.
 | --- | --- |
 | `art/` (the game-ready sprites and backgrounds) | GPL-3.0-only, the same as the code |
 | `source/` (the raw sheets they are cut from) | GPL-3.0-only |
+| `icon.ico` / `icon.icns` (app icon, built from `art/snake_head.png`) | GPL-3.0-only |
 | `ART_PROMPTS.md` | GPL-3.0-only |
 | `fonts/` | SIL Open Font License 1.1, see the `OFL-*.txt` files next to each font |
 

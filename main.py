@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime
 import math
 import os
+import subprocess
 import textwrap
 import webbrowser
 import random
@@ -34,17 +35,18 @@ import colorsys
 from constants import (
     CELL_SIZE, GRID_W, GRID_H, SIDEBAR_W, SCREEN_W, SCREEN_H, BOARD_Y, FPS, BASE_MOVE_INTERVAL,
     BG, GRID_LINE, SIDEBAR_BG, TEXT, TEXT_DIM, ACCENT, DANGER, GOLD, GREEN, PURPLE,
-    SNAKE_SKINS, SKIN_UNLOCK_REQUIREMENT, P2_COLOR, PLAYER_COLORS, PLAYER_LABELS, MAX_PLAYERS,
+    SNAKE_SKINS, SKIN_UNLOCK_REQUIREMENT, SKIN_SHOP_COST, P2_COLOR, PLAYER_COLORS, PLAYER_LABELS, MAX_PLAYERS,
     TRAIL_EFFECTS, TRAIL_NAMES,
     FOOD_NORMAL, FOOD_GOLDEN, FOOD_SPEED, FOOD_SHRINK, FOOD_COLORS,
     DOWNERUP_BOMB, DOWNERUP_CURSE, DOWNERUP_COLORS, COLORBLIND_DOWNERUP_COLORS,
     POWERUP_GHOST, POWERUP_MAGNET, POWERUP_SHIELD, POWERUP_SLOWMO, POWERUP_MULT,
     POWERUP_FREEZE, POWERUP_TELEPORT, POWERUP_REVIVE, POWERUP_COLORS, POWERUP_DURATIONS, CURSE_DURATION,
-    PORTAL_A, PORTAL_B, MODES, MODE_CONFIG, MODE_DESC, DIFFICULTIES, DIFFICULTY_SPEED_MULT,
+    PORTAL_A, PORTAL_B, MODES, MODE_CONFIG, MODE_DESC, ARCADE_COST, ARCADE_MODES, DIFFICULTIES, DIFFICULTY_SPEED_MULT,
+    REVERSED_LEVEL_SECONDS, REVERSED_MAX_LEVEL, REVERSED_CREDIT,
     RESUME_COUNTDOWN_STEPS, RESUME_COUNTDOWN_STEP_SECONDS, METEOR_WARN_SECONDS, REPO_URL, SUPPORT_URL,
     GAME_VERSION, MIN_MULTIPLAYER_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
     LAN_RULESETS, LAN_RULESET_NAMES, MAPS, MAP_NAMES, MAP_THEMES, DEFAULT_THEME,
-    EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS, ONLINE_SERVER_URL,
+    EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS, ONLINE_SERVER_URL, MUSTACHE_CODE,
 )
 from snake import PlayerSnake
 from enemy import EnemySnake
@@ -84,22 +86,93 @@ RESOLUTIONS = {"144p": (256, 144), "360p": (640, 360), "480p": (854, 480),
 display: pygame.Surface  # the real window
 screen: gfx.HSurface     # the logical canvas everything draws onto
 canvas_offset = (0, 0)
+_app_icon: Optional[pygame.Surface] = None  # set once art is loaded - see apply_display() below
 
 
-def apply_display(resolution: str, fullscreen: bool) -> None:
+SCREEN_MODE_FLAGS = {"Window": pygame.RESIZABLE, "Borderless": pygame.NOFRAME, "Fullscreen": pygame.FULLSCREEN}
+
+
+def _transition_message(text: str) -> None:
+    """A brief full-screen message right before the window gets torn down and rebuilt
+    (changing resolution or screen mode) - without it the screen just cuts to black for
+    a beat with no explanation, which reads as a crash rather than a deliberate switch."""
+    try:
+        screen.fill(BG)
+        msg = font_mid.render(text, True, TEXT)
+        screen.blit(msg, (SCREEN_W // 2 - msg.get_width() // 2, SCREEN_H // 2 - msg.get_height() // 2))
+        display.fill(BG)
+        display.blit(screen, canvas_offset)
+        pygame.display.flip()
+        pygame.time.delay(350)
+    except (pygame.error, NameError):
+        pass  # window/fonts not built yet (startup) - nothing to show a message on
+
+
+def apply_display(resolution: str, screen_mode: str) -> None:
     """(Re)create the window at a preset and rebuild the canvas and fonts for it."""
     global display, screen, canvas_offset
     w, h = RESOLUTIONS.get(resolution, RESOLUTIONS["1080p"])
+    info = pygame.display.Info()
+    if screen_mode != "Fullscreen" and info.current_w > 0 and info.current_h > 0:
+        # Real fullscreen takes over the whole display regardless of the taskbar, but a
+        # plain or borderless *window* still has to fit inside the usable desktop area -
+        # the OS won't shrink an oversized one for us. A resolution preset that matches
+        # (or exceeds) the monitor's own size would otherwise push the window's bottom
+        # edge off-screen or under the taskbar, clipping anything drawn near it (like the
+        # FPS counter).
+        margin_h = 48 if screen_mode == "Window" else 4  # room for the title bar / taskbar
+        w = min(w, info.current_w - 8)
+        h = min(h, info.current_h - margin_h)
     gfx.set_scale(min(w / SCREEN_W, h / SCREEN_H))  # also rebuilds every gfx.Font
-    flags = pygame.SCALED | (pygame.FULLSCREEN if fullscreen else pygame.RESIZABLE)
+    flags = pygame.SCALED | SCREEN_MODE_FLAGS.get(screen_mode, pygame.RESIZABLE)
+    if screen_mode == "Borderless":
+        # NOFRAME windows don't get OS-centered like normal windows do - place it by hand.
+        # Let SDL do the centering itself ("centered", not numbers we compute from
+        # display.Info()) since hand-rolled math gets it wrong under HiDPI/fractional
+        # scaling or multi-monitor setups where reported and actual pixels disagree.
+        os.environ["SDL_VIDEO_WINDOW_POS"] = "centered"
+    else:
+        # Otherwise clear it - a Borderless window earlier in this process would
+        # otherwise leave its position pinned for every window mode after it too.
+        os.environ.pop("SDL_VIDEO_WINDOW_POS", None)
     try:
         display = pygame.display.set_mode((w, h), flags)
     except pygame.error:
         display = pygame.display.set_mode((w, h))
+    if _app_icon is not None:
+        # Some platforms reset the window icon to the default when a *new* native
+        # window is created (as happens here on a resolution/screen-mode change),
+        # so it needs reapplying every time, not just once at boot.
+        pygame.display.set_icon(_app_icon)
     screen = gfx.surface((SCREEN_W, SCREEN_H))
     cw, ch = pygame.Surface.get_size(screen)
     canvas_offset = ((w - cw) // 2, (h - ch) // 2)
     gfx.set_offset(canvas_offset)
+
+
+def restart_game() -> None:
+    """Relaunch the whole process. Switching window-manager flags (Fullscreen <-> Window
+    <-> Borderless) on an *already-open* window doesn't reliably reset its geometry on
+    every platform - some window managers leave the old position/size behind, which only
+    shows up as clipped content. A fresh process boot always gets a clean window, so
+    that's what a screen-mode change forces instead of trying to coax the existing one.
+
+    Spawns the next instance rather than os.execv-ing in place: a frozen (PyInstaller)
+    build's bootloader sets _PYI_* env vars pointing at its own _MEI extraction dir, which
+    a same-process exec would hand straight to the child (see updater.py's _fresh_child_env,
+    same hazard); on Windows the onefile bootloader can also tear down that extraction dir
+    the moment this process exits, which a replaced-in-place process still depends on."""
+    _transition_message("Restarting...")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("_PYI_")}
+    cmd = [sys.executable] if updater.is_frozen() else [sys.executable, os.path.abspath(sys.argv[0])]
+    kwargs = {"env": env, "close_fds": True}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+    else:
+        kwargs["start_new_session"] = True
+    subprocess.Popen(cmd, **kwargs)
+    pygame.quit()
+    os._exit(0)
 
 
 def _font_file(name: str) -> Optional[str]:
@@ -117,9 +190,22 @@ font_chat = gfx.Font(_BODY_FONT, 17)
 font_title = gfx.Font(_BODY_FONT, 50)
 
 _boot_settings = persistence.load()["settings"]
-apply_display(_boot_settings.get("resolution", "1080p"), bool(_boot_settings.get("fullscreen", True)))
+apply_display(_boot_settings.get("resolution", "1080p"), str(_boot_settings.get("screen_mode", "Fullscreen")))
 
 art = Art(gfx.asset_path("assets/art"))  # needs the display, so after apply_display
+
+_src_icon = art.raw.get("snake_head")
+if _src_icon is not None:
+    # A square window/taskbar/alt-tab icon built from the snake head sprite. The sprite is
+    # a wide rectangle (head facing right, eyes near the snout on the right edge) - fitting
+    # the whole thing into a square would shrink it down to a thin, illegible sliver at
+    # taskbar sizes, so instead crop a square off the snout end, which keeps the eyes big
+    # and centered and still reads as a face down to 16x16.
+    _iw, _ih = _src_icon.get_size()
+    _crop = pygame.Surface((_ih, _ih), pygame.SRCALPHA)
+    _crop.blit(_src_icon, (0, 0), (_iw - _ih, 0, _ih, _ih))
+    _app_icon = pygame.transform.smoothscale(_crop, (128, 128))
+    pygame.display.set_icon(_app_icon)
 
 _icon_font_cache: Dict[int, gfx.Font] = {}
 
@@ -170,10 +256,38 @@ STATE_UPDATE_ERROR = "update_error"
 STATE_EASTER_WARNING = "easter_warning"
 STATE_SECRET_SHOP = "secret_shop"
 STATE_PERK_PICK = "perk_pick"
+STATE_ARCADE = "arcade"
+STATE_ARCADE_RESULT = "arcade_result"
 
 # After the run-ending death, the board stays up this long (frozen, with the
 # screen shake and death particles playing) before the Game Over screen.
 DEATH_PAUSE_SECONDS = 0.9
+
+# A few variants per cause of death, picked at random so the Game Over screen
+# doesn't show the exact same line every time you slam into the same wall.
+DEATH_FLAVOR: Dict[str, Tuple[str, ...]] = {
+    "wall": ("You slammed into the wall.", "You faceplanted into the wall.",
+             "Walls: 1, You: 0.", "You tried to phase through the wall. Spoiler: you can't."),
+    "self": ("You bit yourself.", "You tied yourself in a knot.",
+             "Classic self-sabotage.", "You snacked on your own tail."),
+    "obstacle": ("You crashed into an obstacle.", "That obstacle didn't move. You did.",
+                 "Obstacle: unscathed. You: not so much."),
+    "teammate": ("You crashed into your teammate.", "Friendly fire isn't so friendly.",
+                 "Teamwork makes the dream work. This wasn't that."),
+    "rival": ("The rival snake got you.", "Outplayed by a rival snake.",
+              "The rival snake had other plans."),
+    "meteor": ("You were hit by a meteor.", "Direct meteor hit. Rough.",
+               "The sky had other plans for you."),
+    "hunter": ("The hunter snake caught you.", "The hunter snake had you in its sights.",
+               "Hunted down."),
+    "bomb": ("You detonated a bomb.", "Boom. That's it, that's the reason.",
+             "You really stepped on that one."),
+}
+
+
+def _death_reason(key: str) -> str:
+    return random.choice(DEATH_FLAVOR[key])
+
 
 # Floating "+10"/"-5" popups at the pickup tile, and the tail's grow-in pop.
 SCORE_POPUP_DURATION = 0.8
@@ -184,6 +298,7 @@ BLINK_PERIOD = 3.2       # how often the head eye blinks
 BLINK_HOLD = 0.12        # how long the blink stays closed
 TONGUE_PERIOD = 4.0      # how often the tongue flicks out
 TONGUE_HOLD = 0.18
+GHOST_BOB_PERIOD = 1.4   # one full bob-and-drift loop of the best-run ghost marker's animation
 
 # Near misses: head ends up next to something lethal but survives. Rewards
 # skillful close play instead of only ever reacting to actual death.
@@ -257,11 +372,12 @@ POWERUP_SPRITES = {
 }
 
 MENU_ITEMS = [
-    "Start Game", "Mode", "Skin", "Multiplayer", "Daily Quests", "Shop", "Settings",
+    "Start Game", "Mode", "Skin", "Multiplayer", "Daily Quests", "Shop", "Arcade", "Settings",
     "How to Play", "Stats", "Leaderboard", "Achievements", "Changelog", "Check for Updates", "Quit",
 ]
 if STORE != "github":  # a store build (itch.io, ...) is updated by the store, not by us
     MENU_ITEMS.remove("Check for Updates")
+SHOP_TABS = ["Trails", "Skins", "Extras"]
 PAUSE_ITEMS = ["Resume", "Restart", "Settings", "Main Menu"]
 LAN_HOST_PAUSE_ITEMS = ["Resume", "Settings", "End Session"]
 LAN_MENU_ITEMS = ["Host LAN Game", "Join LAN Game", "Host Online Game", "Join Online Game", "Back"]
@@ -361,6 +477,14 @@ class Game:
         self.wallet = self.data.get("wallet", 0)
         self.owned_trails = set(self.data.get("owned_trails", ["None"]))
         self.equipped_trail = self.data.get("equipped_trail", "None")
+        self.owned_skins = set(self.data.get("owned_skins", ["Classic"]))
+        self.arcade_unlocked = bool(self.data.get("arcade_unlocked", False))
+        self.arcade_best: Dict[str, float] = dict(self.data.get("arcade_best", {}))
+        self.arcade_mode: Optional[str] = None  # set only while actually playing/showing an arcade run
+        self.arcade_won = False
+        self.arcade_result: dict = {}
+        self.arcade_goal: Optional[Tuple[int, int]] = None  # Maze Escape's exit cell
+        self.reversed_level = 1  # Reversed mode's current difficulty level
 
         self.state = STATE_MENU
         self.prev_state = STATE_MENU  # where Settings/Pause should return to
@@ -368,6 +492,9 @@ class Game:
         self.pause_index = 0
         self.settings_index = 0
         self.shop_index = 0
+        self.shop_tab = 0
+        self.shop_scroll = 0.0
+        self.arcade_index = 0
         self.mode_idx = 0
         self.skin_idx = 0
 
@@ -441,12 +568,21 @@ class Game:
         self.theme = dict(DEFAULT_THEME)
         self.ambient_particles: List[list] = []  # [x, y, vx, vy, life, max_life, radius]
         self._ambient_spawn_accum = 0.0
+        self._ambient_sprite_cache: dict = {}  # (radius, color) -> pre-rendered sprite, faded via set_alpha
+        self._grid_cache: dict = {}  # (color, k) -> pre-rendered grid-line surface
+        self._speed_glow_cache: dict = {}  # color -> pre-rendered speed-boost glow sprite
         self.local_ip: Optional[str] = None
 
         self.easter_down_count = 0
         self.easter_streak_start = 0
         self.easter_stage = 0
         self.secret_shop_toast_until = 0
+
+        # Easter egg: typing "mustache" on the main menu gives the local player's own
+        # snake a cosmetic mustache for every run after, for the rest of this process -
+        # it's one-way, quit and relaunch to shave (see _track_mustache_code).
+        self.mustache_typed = ""
+        self.mustache_mode = False
 
         # Auto-updater: checks GitHub Releases on a background thread so the
         # UI never blocks. The startup check is silent on "no update" or a
@@ -477,7 +613,7 @@ class Game:
     # ---------- helpers ----------
 
     def mode_name(self) -> str:
-        return MODES[self.mode_idx]
+        return self.arcade_mode or MODES[self.mode_idx]
 
     def mode_cfg(self) -> dict:
         base = MODE_CONFIG[self.mode_name()]
@@ -512,7 +648,7 @@ class Game:
             idx = (idx + direction) % n
             name = SKIN_NAMES[idx]
             req = SKIN_UNLOCK_REQUIREMENT[name]
-            if req is None or req in self.tracker.unlocked:
+            if req is None or req in self.tracker.unlocked or name in self.owned_skins:
                 self.skin_idx = idx
                 return
 
@@ -549,11 +685,15 @@ class Game:
                 self.sounds.ui_sounds = value
             elif key == "particles":
                 self.particles.density = PARTICLE_DENSITY.get(value, 1.0)
-            elif key in ("fullscreen", "resolution"):
+            elif key == "resolution":
                 self._apply_display()
         self._unlock("tinkerer")
         if save:
             self.save_settings()
+        if key == "screen_mode" and save:
+            # Must happen after the save above - restart_game() replaces this process
+            # and never returns, so the settings file has to already be written.
+            restart_game()
 
     def setting_step(self, d: SettingDef, direction: int) -> None:
         cur = self.setting_get(d.key)
@@ -567,12 +707,17 @@ class Game:
             self.setting_set(d.key, new)
 
     def _apply_display(self) -> None:
-        apply_display(str(self.settings["resolution"]), bool(self.settings["fullscreen"]))
+        _transition_message("Applying resolution...")
+        apply_display(str(self.settings["resolution"]), str(self.settings["screen_mode"]))
         # Anything cached at the old pixel density would be resampled every frame.
         self._fade_from = None
         self._vignette_cache.clear()
         self._bg_cache.clear()
         self._floor_cache.clear()
+        self._ambient_sprite_cache.clear()
+        self._grid_cache.clear()
+        self._speed_glow_cache.clear()
+        self.particles.clear_sprite_cache()
         _icon_font_cache.clear()
         art.clear()
 
@@ -633,6 +778,9 @@ class Game:
         self.data["wallet"] = self.wallet
         self.data["owned_trails"] = sorted(self.owned_trails)
         self.data["equipped_trail"] = self.equipped_trail
+        self.data["owned_skins"] = sorted(self.owned_skins)
+        self.data["arcade_unlocked"] = self.arcade_unlocked
+        self.data["arcade_best"] = self.arcade_best
         persistence.save(self.data)
 
     def trail_color(self, t: float, offset: float = 0.0) -> Optional[Tuple[int, int, int]]:
@@ -1248,7 +1396,14 @@ class Game:
     def player2_alive(self, v: bool) -> None:
         self.players_alive[1] = v
 
-    def reset_run(self, match_size: Optional[int] = None) -> None:
+    def reset_run(self, match_size: Optional[int] = None, arcade: Optional[str] = None) -> None:
+        # Set before mode_cfg()/mode_name() are read below, since mode_name() returns this
+        # when set. Any reset_run() call that doesn't explicitly pass arcade= - including a
+        # normal "Restart"/"Main Menu" from a *previous* arcade run - clears it back to the
+        # regular Mode selection instead of leaving the game stuck thinking it's still
+        # in an arcade run.
+        self.arcade_mode = arcade
+        self.arcade_won = False
         cfg = self.mode_cfg()
         cx, cy = GRID_W // 2, GRID_H // 2
 
@@ -1279,7 +1434,7 @@ class Game:
         # swap in an arbitrary map would break the fairness of its
         # leaderboard. Everything else (solo or multiplayer, LAN or local)
         # gets the chosen map's obstacles, theme, and ambient effect.
-        if self.mode_name() != "Daily":
+        if self.mode_name() != "Daily" and not cfg.get("arcade"):
             self.theme = dict(MAP_THEMES.get(self.map_name, DEFAULT_THEME))
             heads = [p.head for p in self.players if p is not None]
             heads.extend(self.rivals[i].head for i in range(len(self.rivals)))
@@ -1377,8 +1532,10 @@ class Game:
                 self.event_director = EventDirector(random.Random())
 
         # Ghost replay: single-snake local modes only. Coop has two snakes and a
-        # LAN client doesn't simulate, so neither has one clean trail to record.
-        self.ghost_enabled = not cfg["coop"] and self.lan_role is None
+        # LAN client doesn't simulate, so neither has one clean trail to record. Arcade
+        # runs don't record one either - "best" is tracked as a single number instead
+        # (see arcade_best), not a trail, and the mode name isn't a stable ghost key.
+        self.ghost_enabled = not cfg["coop"] and self.lan_role is None and not cfg.get("arcade")
         self.recording_trail: List[List[int]] = []
         ghost = self.ghosts.get(self.mode_name()) if self.ghost_enabled else None
         self.ghost_trail: Optional[List[List[int]]] = ghost["trail"] if ghost else None
@@ -1393,10 +1550,115 @@ class Game:
             fx, fy = random_free_cell(self.occupied_cells())
             self.foods.append(Food(fx, fy, FOOD_NORMAL))
             random.seed()
-        else:
+        elif cfg.get("food", True):
             self._spawn_food()
 
         self.game_over_reason = ""
+
+        if cfg.get("arcade"):
+            self._setup_arcade(cfg)
+
+    def start_arcade(self, name: str) -> None:
+        self.reset_run(arcade=name)
+        self.state = STATE_PLAYING
+
+    def _setup_arcade(self, cfg: dict) -> None:
+        """Per-minigame extra setup, run once at the end of reset_run() for the three
+        Arcade modes - everything generic (snake spawn, stats, timer, HUD) is already
+        handled by the normal reset_run() body above via their MODE_CONFIG entries."""
+        if self.arcade_mode == "Hunter Gauntlet":
+            self.rivals.append(EnemySnake(GRID_W - 5, GRID_H - 5, hunter=True))
+        elif self.arcade_mode == "Maze Escape":
+            self._setup_arcade_maze()
+        elif self.arcade_mode == "Reversed":
+            self.reversed_level = 1
+            self.rivals.append(EnemySnake(*self._reversed_spawn_point(0), hunter=True))
+            # You're a single apple, not a growing snake - no neck to trip over.
+            self.player.body = deque([self.player.body[0]])
+            self.player.prev_body = list(self.player.body)
+
+    # Evenly spread around the board's perimeter/corners so a fresh hunter doesn't spawn
+    # on top of the player (who starts near the centre) or right next to another hunter.
+    _REVERSED_SPAWNS = [
+        (GRID_W - 5, GRID_H - 5), (5, 5), (5, GRID_H - 5), (GRID_W - 5, 5),
+        (GRID_W // 2, 5), (GRID_W // 2, GRID_H - 5), (5, GRID_H // 2), (GRID_W - 5, GRID_H // 2),
+        (GRID_W // 4, GRID_H // 4), (3 * GRID_W // 4, 3 * GRID_H // 4),
+    ]
+
+    def _reversed_spawn_point(self, i: int) -> Tuple[int, int]:
+        return self._REVERSED_SPAWNS[i % len(self._REVERSED_SPAWNS)]
+
+    def _setup_arcade_maze(self) -> None:
+        """Procedurally carves a maze with a randomized DFS ('recursive backtracker') on a
+        coarse lattice: maze cells live at odd grid coordinates, with the even coordinates
+        between them as carvable walls. The goal is placed at whichever cell the search
+        reached last (tracked by path length from the start) - by construction that's
+        always connected to the start, so there's no separate reachability check to run.
+        The player spawns at the lattice cell closest to the board's usual center, with
+        its immediate footprint forced clear so the snake can't spawn inside a wall
+        regardless of which direction the claude -r
+         happened to carve away from there first."""
+        mw, mh = (GRID_W - 1) // 2, (GRID_H - 1) // 2
+        visited = [[False] * mh for _ in range(mw)]
+
+        def to_grid(cx: int, cy: int) -> Tuple[int, int]:
+            return 1 + cx * 2, 1 + cy * 2
+
+        start_cx, start_cy = mw // 2, mh // 2
+        obstacles = {(x, y) for x in range(GRID_W) for y in range(GRID_H)}
+        stack = [(start_cx, start_cy)]
+        visited[start_cx][start_cy] = True
+        obstacles.discard(to_grid(start_cx, start_cy))
+        dist = {(start_cx, start_cy): 0}
+        farthest = (start_cx, start_cy)
+        while stack:
+            cx, cy = stack[-1]
+            options = [(cx + dx, cy + dy, dx, dy) for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1))
+                      if 0 <= cx + dx < mw and 0 <= cy + dy < mh and not visited[cx + dx][cy + dy]]
+            if not options:
+                stack.pop()
+                continue
+            nx, ny, dx, dy = random.choice(options)
+            visited[nx][ny] = True
+            gx0, gy0 = to_grid(cx, cy)
+            gx1, gy1 = to_grid(nx, ny)
+            obstacles.discard((gx1, gy1))
+            obstacles.discard(((gx0 + gx1) // 2, (gy0 + gy1) // 2))
+            d = dist[(cx, cy)] + 1
+            dist[(nx, ny)] = d
+            if d > dist[farthest]:
+                farthest = (nx, ny)
+            stack.append((nx, ny))
+
+        sx, sy = to_grid(start_cx, start_cy)
+        # Guaranteed-clear spawn footprint (the snake's 3 body cells plus one ahead) -
+        # widening a cell that's already connected to the rest of the maze can't
+        # disconnect anything, so this is safe even if the maze carved elsewhere first.
+        for ddx in (-2, -1, 0, 1):
+            obstacles.discard((sx + ddx, sy))
+        # PlayerSnake always spawns heading right with its body laid out horizontally
+        # (snake.py's constructor doesn't take a direction), so the maze needs a real
+        # corridor continuing east of the pocket too - otherwise the only correct path
+        # to the goal could start by going left, which set_direction() correctly refuses
+        # (it won't reverse straight into the snake's own neck), stranding the player at
+        # the very first move. Force one more cell open east of the pocket to guarantee
+        # that corridor exists; it's trivially connected through the pocket either way.
+        obstacles.discard((sx + 2, sy))
+        self.obstacles = obstacles
+        self.player = PlayerSnake(sx, sy)
+        self.arcade_goal = to_grid(*farthest)
+
+    def _arcade_win(self) -> None:
+        """Maze Escape: the player's head reached the goal tile - a success, not a death,
+        so this skips _kill_snake entirely and finalizes the run directly."""
+        self.arcade_won = True
+        if self.arcade_goal is not None:
+            px, py = grid_to_px(*self._center(self.arcade_goal))
+            self.particles.explosion(px, py, GREEN, radius=50)
+        self.shake(0.2, 4)
+        self.sounds.play(self.sounds.achievement)
+        self.game_over_reason = "You found the exit!"
+        self._finalize_game_over()
 
     def occupied_cells(self) -> set:
         occ = set(self.player.body) | self.obstacles
@@ -1589,7 +1851,7 @@ class Game:
             if self._consume_save("p1"):
                 self.particles.burst(*grid_to_px(*self._center(self.player.head)), (120, 255, 190), count=20)
             else:
-                self._kill_snake("p1", "You were hit by a meteor.")
+                self._kill_snake("p1", _death_reason("meteor"))
         else:
             self.stats["meteors_dodged"] += 1
 
@@ -1647,7 +1909,7 @@ class Game:
             hunter.alive = False  # the hunter is spent after being fended off
             self.particles.burst(*grid_to_px(*self._center(hunter.head)), EVENTS[EVENT_HUNTER].color, count=24)
         else:
-            self._kill_snake("p1", "The hunter snake caught you.")
+            self._kill_snake("p1", _death_reason("hunter"))
 
     def _maybe_offer_perk(self) -> None:
         if not self.perks_on or self.state != STATE_PLAYING:
@@ -1773,6 +2035,20 @@ class Game:
         self.time_alive += dt
         self.stats["time_alive"] = self.time_alive
 
+        if self.arcade_mode == "Reversed" and self.player_alive:
+            target_level = min(REVERSED_MAX_LEVEL, 1 + int(self.time_alive // REVERSED_LEVEL_SECONDS))
+            if target_level > self.reversed_level:
+                self.reversed_level = target_level
+                self.rivals.append(EnemySnake(*self._reversed_spawn_point(len(self.rivals)), hunter=True))
+                self.sounds.play(self.sounds.menu_move)
+
+            alive_rivals = [r for r in self.rivals if r.alive]
+            if alive_rivals:
+                hx, hy = self.player.head
+                nearest = min(abs(hx - r.head[0]) + abs(hy - r.head[1]) for r in alive_rivals)
+                if nearest <= 4:
+                    self.shake(0.15, (5 - nearest) * 1.4)  # closer hunter -> stronger, continuous shake
+
         if self.event_director:
             for kind, eid in self.event_director.update(dt):
                 self._on_event(kind, eid)
@@ -1885,7 +2161,7 @@ class Game:
 
         self.move_accum += dt
         interval = self.move_interval()
-        if self.move_accum >= interval:
+        if not cfg.get("manual_move") and self.move_accum >= interval:
             self.move_accum -= interval
             self._tick()
             if self.lan_role == "host":
@@ -2170,6 +2446,10 @@ class Game:
             if self._snake_alive(tag):
                 self._check_portal(tag, snake)
 
+        if self.arcade_mode == "Maze Escape" and self.player_alive and self.player.head == self.arcade_goal:
+            self._arcade_win()
+            return
+
         if self.player_alive and self.near_miss_cooldown <= 0:
             self._check_near_miss(cfg)
 
@@ -2234,11 +2514,11 @@ class Game:
             return False, ""
 
         if not (0 <= nx < GRID_W and 0 <= ny < GRID_H):
-            return True, "You slammed into the wall."
+            return True, _death_reason("wall")
         if snake.self_collision():
-            return True, "You bit yourself."
+            return True, _death_reason("self")
         if (nx, ny) in self.obstacles:
-            return True, "You crashed into an obstacle."
+            return True, _death_reason("obstacle")
 
         if cfg["coop"]:
             my_idx = PTAGS.index(tag)
@@ -2246,10 +2526,10 @@ class Game:
                 if i == my_idx or other is None or not self.players_alive[i]:
                     continue
                 if (nx, ny) in set(other.body):
-                    return True, "You crashed into your teammate."
+                    return True, _death_reason("teammate")
         for r in self.rivals:
             if r.alive and (nx, ny) in r.occupies():
-                return True, "The rival snake got you."
+                return True, _death_reason("rival")
         return False, ""
 
     def _check_portal(self, tag: str, snake: PlayerSnake) -> None:
@@ -2373,10 +2653,10 @@ class Game:
                 self._announce("DEFUSED!", GREEN)
                 self._start_countdown()
             else:
-                self.particles.burst(px, py, DANGER, count=30, speed=260, life=0.7)
+                self.particles.explosion(px, py, DANGER)
                 self.shake(0.35, 8)
                 self.sounds.play(self.sounds.bomb)
-                self._kill_snake(tag, "You detonated a bomb.")
+                self._kill_snake(tag, _death_reason("bomb"))
 
     # ---------- death / game over ----------
 
@@ -2411,6 +2691,13 @@ class Game:
         self._finalize_game_over()
 
     def _finalize_game_over(self) -> None:
+        if self.arcade_mode:
+            # Arcade runs skip the whole normal end-of-run economy on purpose (coins,
+            # quests, streak, leaderboard, ghosts) - otherwise Food Rush in particular
+            # would be a trivial coin farm that undoes the point of the coin rebalance.
+            self._finalize_arcade_run()
+            return
+
         today = datetime.date.today()
         today_iso = today.isoformat()
         yesterday_iso = (today - datetime.timedelta(days=1)).isoformat()
@@ -2429,7 +2716,7 @@ class Game:
         persistence.update_stat_bests(self.data, final)
         persistence.add_run_history(self.data, self.score, self.mode_name(), today_iso)
 
-        self.run_coins_earned = max(0, int(self.score // 10 * (1 + 0.5 * self.perks.get("midas", 0))))
+        self.run_coins_earned = max(0, int(self.score // 25 * (1 + 0.5 * self.perks.get("midas", 0))))
         self.wallet += self.run_coins_earned
         streak_bonus = persistence.apply_daily_streak(self.data, today_iso, yesterday_iso)
         self.run_streak_bonus = streak_bonus or 0
@@ -2497,6 +2784,53 @@ class Game:
             persistence.save(self.data)
             self.pending_score_entry = None
         self.state = STATE_GAME_OVER
+
+    def _finalize_arcade_run(self) -> None:
+        """The whole end-of-run path for an Arcade minigame: no coins, no quests, no
+        streak, no leaderboard, no ghost - just a best-of-N kept in arcade_best, scored
+        differently per game (Maze Escape only counts a genuine escape; a timeout scores
+        0 so it can never overwrite a real best with "no run")."""
+        name = self.arcade_mode
+        if name == "Maze Escape":
+            value = float(self.time_remaining or 0.0) if self.arcade_won else 0.0
+            won = self.arcade_won
+        elif name in ("Hunter Gauntlet", "Reversed"):
+            value = float(self.time_alive)
+            won = True
+        else:  # Food Rush
+            value = float(self.score)
+            won = True
+
+        best = self.arcade_best.get(name, 0.0)
+        is_new_best = won and value > best
+        if is_new_best:
+            self.arcade_best[name] = value
+
+        # Several existing achievement checks index stats directly (s["food_eaten"]) rather
+        # than s.get(...), because a normal run always hands the tracker a full stats dict -
+        # so this has to be one too, not just the couple of keys the new arcade achievements
+        # themselves need, or checking the other (unrelated) achievements raises a KeyError.
+        final = dict(self.stats)
+        final["score"] = self.score
+        final["combo"] = self.stats["combo_peak"]
+        final["length"] = self.stats["length_peak"]
+        end_stats = dict(final, mode=name, time_alive=self.time_alive, arcade_won=self.arcade_won)
+        newly = self.tracker.check(end_stats)
+        for ach in newly:
+            self.toast_queue.append(("Achievement Unlocked!", ach.name, 3.0))
+            self.sounds.play(self.sounds.achievement)
+        if len(self.arcade_best) >= len(ARCADE_MODES):
+            self._unlock("arcade_regular")  # self-contained: saves + toasts + sound, no-op if already earned
+
+        if is_new_best or newly:
+            self.data["achievements"] = sorted(self.tracker.unlocked)
+            self.save_wallet()  # also persists arcade_best - see save_wallet()
+
+        self.arcade_result = {
+            "name": name, "value": value, "won": won,
+            "best": self.arcade_best.get(name, best), "new_best": is_new_best,
+        }
+        self.state = STATE_ARCADE_RESULT
 
     # ---------- drawing ----------
 
@@ -2668,7 +3002,7 @@ class Game:
                 circle(board, color, (x * k, (y + off * f) * k), max(1, round(rad * f * k)))
 
     def _draw_snake_sprites(self, board, cells, positions, direction, tint, ghost: bool, alive: bool,
-                             anim=None, t: float = 0.0, phase: float = 0.0) -> bool:
+                             anim=None, t: float = 0.0, phase: float = 0.0, mustache: bool = False) -> bool:
         """Draw a snake: one continuous rounded tube that bends smoothly through turns, a head sprite
         that rotates to follow it, and the tongue. False if the art isn't there."""
         if not art.has("snake_head"):
@@ -2716,8 +3050,23 @@ class Game:
 
         tongue_done = (not alive) or ghost or self._draw_tongue_sprite(
             board, (hx + ux * (length / 2 - 1.5), hy + uy * (length / 2 - 1.5)), ux, uy, theta, t, phase)
-        spr = art.get("snake_head", w=length, angle=theta, vflip=ux < -0.001, tint=tint,
-                      alpha=150 if (ghost and alive) else None)
+        stretch = squash = 0.0
+        if alive and anim is not None and anim.turn_anim < TURN_SQUASH_DURATION:
+            # Same cartoon squash-and-stretch as the vector fallback (_draw_snake_body),
+            # just applied to the head sprite's own w/h instead of a rect - it rotates
+            # with `theta` below so it still stretches along the new heading.
+            frac = 1 - anim.turn_anim / TURN_SQUASH_DURATION
+            stretch, squash = 0.3 * frac, 0.22 * frac
+        # The mustache easter egg (see _track_mustache_code) swaps in a second head sprite with a
+        # moustache baked into the art instead of drawing one on top - it comes out crisper than a
+        # vector overlay and doesn't need to be kept in sync with the sprite's own rotation/tint.
+        # Its canvas is padded wider than the plain head's (a real moustache overhangs the face), so
+        # its own width is used here rather than `length` - using `length` would squash that padding
+        # back down to the plain head's narrower aspect ratio and erase the overhang.
+        head_name = "snake_head_mustache" if mustache and art.has("snake_head_mustache") else "snake_head"
+        head_w = self._length_for(head_name, self.SPR_HEAD_THICK) * (1 + stretch)
+        spr = art.get(head_name, w=head_w, h=self.SPR_HEAD_THICK * (1 - squash),
+                      angle=theta, vflip=ux < -0.001, tint=tint, alpha=150 if (ghost and alive) else None)
         if spr is not None:
             cx, cy = hx + ux * 3.0, hy + uy * 3.0
             board.blit(spr, (cx - spr.get_width() / 2, cy - spr.get_height() / 2))
@@ -2725,6 +3074,17 @@ class Game:
             self._draw_tongue_flick(board, positions[0][0], positions[0][1], round(ux), round(uy), t, phase,
                                     reach=length / 2 + 1.5)
         return True
+
+    def _draw_mustache(self, board: pygame.Surface, cx: float, cy: float, ux: float, uy: float) -> None:
+        """Easter egg (type "mustache" on the main menu): a handlebar mustache drawn with plain
+        line primitives, no art asset - two mirrored curls fanning out from the snout, oriented
+        by the same forward/perpendicular pair used for the head sprite's own rotation."""
+        px, py = -uy, ux  # left-perpendicular to the heading
+        half = [(1.5, 1.0), (0.4, 3.0), (-1.2, 4.6), (0.9, 5.8)]
+        color = (54, 36, 28)
+        for side in (1, -1):
+            pts = [(cx + ux * f + px * s * side, cy + uy * f + py * s * side) for f, s in half]
+            gfx.draw.lines(board, color, False, pts, 3)
 
     def _draw_tongue_flick(self, board: pygame.Surface, fx: float, fy: float,
                             dx: int, dy: int, t: float, phase: float, reach: Optional[float] = None) -> None:
@@ -2761,9 +3121,9 @@ class Game:
         return [(dx, 0) for dx in dxs] + [(0, dy) for dy in dys] + [(dx, dy) for dx in dxs for dy in dys]
 
     def _draw_snake_body(self, board: pygame.Surface, snake: PlayerSnake, skin: list, positions: list,
-                         ghost_active: bool, alive: bool, t: float, phase: float) -> None:
+                         ghost_active: bool, alive: bool, t: float, phase: float, mustache: bool = False) -> None:
         drawn = self._draw_snake_sprites(board, list(snake.body), positions, snake.direction, skin[1],
-                                         ghost_active, alive, anim=snake, t=t, phase=phase)
+                                         ghost_active, alive, anim=snake, t=t, phase=phase, mustache=mustache)
         for i, (fx, fy) in enumerate([] if drawn else positions):
             base_color = skin[0] if i == 0 else skin[1]
             color = self._pulse_color(base_color, i, t) if alive else tuple(max(0, c // 3) for c in base_color)
@@ -2801,6 +3161,40 @@ class Game:
                     else:
                         gfx.draw.circle(board, (10, 10, 15), (int(ex), int(ey)), 3)
                     self._draw_tongue_flick(board, fx, fy, eye_dx, eye_dy, t, phase)
+                    if mustache:
+                        self._draw_mustache(board, fx * CELL_SIZE + CELL_SIZE // 2 + eye_dx * 9,
+                                            fy * CELL_SIZE + CELL_SIZE // 2 + eye_dy * 9, eye_dx, eye_dy)
+
+    def _my_player_index(self) -> int:
+        """Which self.players slot is "mine" on this screen - always 0 except for a LAN/online
+        guest, where the host's snapshot fills self.players in absolute slot order (see
+        apply_snapshot), so a p2/p3/p4 guest's own snake isn't self.player."""
+        if self.lan_role == "client" and self.lan_link:
+            slot = getattr(self.lan_link, "my_slot", None)
+            if slot in network.GUEST_SLOTS:
+                return 1 + network.GUEST_SLOTS.index(slot)
+        return 0
+
+    def _draw_reversed_player(self, board: pygame.Surface, alpha: float) -> None:
+        """Reversed mode: the player IS the apple, not a snake - draw the same apple
+        icon food uses instead of a snake body (player.body is trimmed to one cell
+        in _setup_arcade, so there's nothing snake-shaped to draw anyway).
+
+        Deliberately NOT using render_positions()'s sub-tick interpolation here: the
+        hunter snakes (EnemySnake) have no interpolation of their own and always draw
+        snapped to their exact grid cell, and collision is checked once per tick at
+        that same grid resolution. If the apple glided smoothly between cells while
+        hunters snapped, the two would visibly disagree about whether they're
+        touching - the apple would look closer to (or farther from) a hunter than
+        the actual collision cell, which reads as a wrong/laggy hitbox. Snapping the
+        apple to its grid cell too keeps what you see exactly in sync with what kills
+        you, at the cost of the smooth glide normal snake movement has."""
+        if not self.player_alive:
+            return
+        hx, hy = self.player.head
+        cx = hx * CELL_SIZE + CELL_SIZE // 2
+        cy = hy * CELL_SIZE + CELL_SIZE // 2
+        self._draw_food_icon(board, FOOD_NORMAL, cx, cy, radius=CELL_SIZE * 0.42)
 
     def _draw_snake(self, board: pygame.Surface, snake: PlayerSnake, skin: list, alpha: float,
                      ghost_active: bool, alive: bool, name_tag: str) -> None:
@@ -2808,12 +3202,13 @@ class Game:
         # Desyncs blink/tongue timing between snakes so a 4-player match
         # doesn't look like everyone's blinking in unison.
         phase = (id(snake) % 1000) * 0.001
+        mustache = self.mustache_mode and alive and name_tag == PTAGS[self._my_player_index()]
         positions = snake.render_positions(alpha) if alive else [(x, y) for x, y in snake.body]
         # Across a screen edge the positions run on past it; the part that left one side is drawn again
         # shifted by a board width, so it shows up on the other side (see PlayerSnake.render_positions).
         for ox, oy in [(0, 0)] + (self._wrap_copies(positions) if alive else []):
             shifted = positions if not (ox or oy) else [(x + ox, y + oy) for x, y in positions]
-            self._draw_snake_body(board, snake, skin, shifted, ghost_active, alive, t, phase)
+            self._draw_snake_body(board, snake, skin, shifted, ghost_active, alive, t, phase, mustache=mustache)
 
         if alive and positions:
             speed_tier = min(5, self.score // 60)
@@ -2821,9 +3216,24 @@ class Game:
                 hx, hy = positions[0][0] % GRID_W, positions[0][1] % GRID_H
                 cx, cy = hx * CELL_SIZE + CELL_SIZE // 2, hy * CELL_SIZE + CELL_SIZE // 2
                 glow_color = self.trail_color(t) or skin[0]
-                glow = gfx.surface((CELL_SIZE * 3, CELL_SIZE * 3), pygame.SRCALPHA)
-                gfx.draw.circle(glow, (*glow_color, 55), (CELL_SIZE * 3 // 2, CELL_SIZE * 3 // 2), CELL_SIZE)
-                board.blit(glow, (cx - CELL_SIZE * 1.5, cy - CELL_SIZE * 1.5), special_flags=pygame.BLEND_RGBA_ADD)
+                glow_r = CELL_SIZE * 3 // 2
+                glow = self._speed_glow_cache.get(glow_color)
+                if glow is None:
+                    glow = gfx.surface((glow_r * 2, glow_r * 2), pygame.SRCALPHA)
+                    gfx.draw.circle(glow, glow_color, (glow_r, glow_r), CELL_SIZE)
+                    self._speed_glow_cache[glow_color] = glow
+                glow.set_alpha(55)
+                board.blit(glow, (cx - glow_r, cy - glow_r), special_flags=pygame.BLEND_RGBA_ADD)
+
+                # Speed lines streaking off the back of the head, so a boost reads as
+                # motion in a direction rather than just a glow sitting under the snake.
+                dx, dy = snake.direction
+                bx, by = -dx, -dy
+                perp_x, perp_y = -dy, dx
+                for lane, length in ((-5, 6), (0, 9), (5, 6)):
+                    sx, sy = cx + perp_x * lane + bx * 5, cy + perp_y * lane + by * 5
+                    ex, ey = sx + bx * length, sy + by * length
+                    gfx.draw.line(board, glow_color, (sx, sy), (ex, ey), 2)
 
     def ghost_point(self) -> Optional[List[int]]:
         """[x, y, score] of the best run at the same tick as the current run, or
@@ -2840,6 +3250,20 @@ class Game:
         if not (0 <= gx < GRID_W and 0 <= gy < GRID_H):
             return
         cx, cy = gx * CELL_SIZE + CELL_SIZE // 2, gy * CELL_SIZE + CELL_SIZE // 2
+        frames = 0
+        while art.has(f"ghost_{frames}"):
+            frames += 1
+        if frames:
+            # One continuous bob-and-drift loop (see assets/ART_PROMPTS.md's ghost_sheet.png) rather
+            # than a static circle - frame index just comes from the wall clock, same trick as the
+            # tongue flick (_draw_tongue_sprite), so every ghost on screen stays in sync with no state
+            # of its own to track.
+            since = pygame.time.get_ticks() / 1000.0 % GHOST_BOB_PERIOD
+            spr = art.get(f"ghost_{min(frames - 1, int(since / GHOST_BOB_PERIOD * frames))}",
+                          fit=CELL_SIZE * 1.6, alpha=170)
+            if spr is not None:
+                board.blit(spr, (cx - spr.get_width() / 2, cy - spr.get_height() / 2))
+                return
         s = gfx.surface((CELL_SIZE * 2, CELL_SIZE * 2), pygame.SRCALPHA)
         gfx.draw.circle(s, (220, 225, 255, 70), (CELL_SIZE, CELL_SIZE), CELL_SIZE // 2)
         gfx.draw.circle(s, (220, 225, 255, 150), (CELL_SIZE, CELL_SIZE), CELL_SIZE // 2, width=2)
@@ -2982,13 +3406,22 @@ class Game:
         self.ambient_particles = alive
 
     def _draw_ambient(self, board: pygame.Surface) -> None:
+        # Sprites are pre-rendered once per (radius, color) and faded with set_alpha
+        # instead of rebuilding a new SRCALPHA surface for every dust mote every frame.
         for (x, y, vx, vy, life, max_life, radius, color) in self.ambient_particles:
             t = max(0.0, min(1.0, life / max_life))
             alpha = int(200 * t)
-            r = max(1, int(radius))
-            s = gfx.surface((r * 2 + 2, r * 2 + 2), pygame.SRCALPHA)
-            gfx.draw.circle(s, (*color, alpha), (r + 1, r + 1), r)
-            board.blit(s, (x - r, y - r), special_flags=pygame.BLEND_RGBA_ADD)
+            if alpha <= 0:
+                continue
+            r = max(1, round(radius))
+            key = (r, color)
+            img = self._ambient_sprite_cache.get(key)
+            if img is None:
+                img = gfx.surface((r * 2 + 2, r * 2 + 2), pygame.SRCALPHA)
+                gfx.draw.circle(img, (*color, 255), (r + 1, r + 1), r)
+                self._ambient_sprite_cache[key] = img
+            img.set_alpha(alpha)
+            board.blit(img, (x - r, y - r), special_flags=pygame.BLEND_RGBA_ADD)
 
     def draw_playing(self, alpha: float) -> None:
         ox, oy = self.particles.get_shake_offset() if self.screen_shake_enabled else (0, 0)
@@ -2998,14 +3431,22 @@ class Game:
         combo_t = min(1.0, self.combo / 20)
         line_color = tuple(int(GRID_LINE[i] + (ACCENT[i] - GRID_LINE[i]) * combo_t * 0.4) for i in range(3))
         if self.settings["grid_lines"]:
-            for gx in range(GRID_W + 1):
-                gfx.draw.line(board, line_color, (gx * CELL_SIZE, 0), (gx * CELL_SIZE, GRID_H * CELL_SIZE))
-            for gy in range(GRID_H + 1):
-                gfx.draw.line(board, line_color, (0, gy * CELL_SIZE), (GRID_W * CELL_SIZE, gy * CELL_SIZE))
+            # The lines themselves never move, only their colour (by combo) - so cache one
+            # pre-drawn surface per colour bucket instead of redrawing ~90 lines every frame.
+            grid = self._grid_cache.get(line_color)
+            if grid is None:
+                grid = gfx.surface((GRID_W * CELL_SIZE, GRID_H * CELL_SIZE), pygame.SRCALPHA)
+                for gx in range(GRID_W + 1):
+                    gfx.draw.line(grid, line_color, (gx * CELL_SIZE, 0), (gx * CELL_SIZE, GRID_H * CELL_SIZE))
+                for gy in range(GRID_H + 1):
+                    gfx.draw.line(grid, line_color, (0, gy * CELL_SIZE), (GRID_W * CELL_SIZE, gy * CELL_SIZE))
+                self._grid_cache[line_color] = grid
+            board.blit(grid, (0, 0))
 
         for (ox2, oy2) in self.obstacles:
             self._draw_obstacle(board, ox2, oy2)
 
+        self.particles.draw_scorch(board)
         self._draw_ambient(board)
 
         if self.portal_pair:
@@ -3018,17 +3459,29 @@ class Game:
                         start = t + ring * 2
                         gfx.draw.arc(board, color, (cx - rad, cy - rad, rad * 2, rad * 2), start, start + 4, 2)
 
+        if self.arcade_mode == "Maze Escape" and self.arcade_goal is not None:
+            gx, gy = self.arcade_goal
+            cx, cy = gx * CELL_SIZE + CELL_SIZE // 2, gy * CELL_SIZE + CELL_SIZE // 2
+            pulse = 0.5 + 0.5 * math.sin(pygame.time.get_ticks() / 250.0)
+            rad = CELL_SIZE // 2 - 1 + int(pulse * 2)
+            gfx.draw.circle(board, GREEN, (cx, cy), rad, width=2)
+            gfx.draw.circle(board, GREEN, (cx, cy), max(2, CELL_SIZE // 2 - 6))
+
+        now = pygame.time.get_ticks() / 1000.0
         for f in self.foods:
-            cx, cy = f.x * CELL_SIZE + CELL_SIZE // 2, f.y * CELL_SIZE + CELL_SIZE // 2
-            self._draw_food_icon(board, f.kind, cx, cy, CELL_SIZE // 2 - 2)
+            dy, pulse = self._idle_wobble(f.x, f.y, now)
+            cx, cy = f.x * CELL_SIZE + CELL_SIZE // 2, f.y * CELL_SIZE + CELL_SIZE // 2 + dy
+            self._draw_food_icon(board, f.kind, cx, cy, (CELL_SIZE // 2 - 2) * pulse)
 
         for p in self.powerups:
-            cx, cy = p.x * CELL_SIZE + CELL_SIZE // 2, p.y * CELL_SIZE + CELL_SIZE // 2
-            self._draw_powerup_icon(board, p.kind, cx, cy, CELL_SIZE // 2 - 2)
+            dy, pulse = self._idle_wobble(p.x, p.y, now)
+            cx, cy = p.x * CELL_SIZE + CELL_SIZE // 2, p.y * CELL_SIZE + CELL_SIZE // 2 + dy
+            self._draw_powerup_icon(board, p.kind, cx, cy, (CELL_SIZE // 2 - 2) * pulse)
 
         for d in self.downerups:
-            cx, cy = d.x * CELL_SIZE + CELL_SIZE // 2, d.y * CELL_SIZE + CELL_SIZE // 2
-            self._draw_downerup_icon(board, d.kind, cx, cy, CELL_SIZE // 2 - 2)
+            dy, pulse = self._idle_wobble(d.x, d.y, now)
+            cx, cy = d.x * CELL_SIZE + CELL_SIZE // 2, d.y * CELL_SIZE + CELL_SIZE // 2 + dy
+            self._draw_downerup_icon(board, d.kind, cx, cy, (CELL_SIZE // 2 - 2) * pulse)
 
         self._draw_meteors(board)
 
@@ -3047,7 +3500,10 @@ class Game:
 
         skin = SNAKE_SKINS[SKIN_NAMES[self.skin_idx]]
         ghost_active = POWERUP_GHOST in self.active_powerups
-        self._draw_snake(board, self.player, skin, alpha, ghost_active, self.player_alive, "p1")
+        if self.arcade_mode == "Reversed":
+            self._draw_reversed_player(board, alpha)
+        else:
+            self._draw_snake(board, self.player, skin, alpha, ghost_active, self.player_alive, "p1")
         for i in range(1, self.match_size):
             if self.players[i] is not None:
                 self._draw_snake(board, self.players[i], PLAYER_COLORS[i], alpha, ghost_active,
@@ -3275,6 +3731,11 @@ class Game:
         y += 20
         screen.blit(font_small.render(f"Length: {len(self.player.body)}", True, TEXT_DIM), (x, y))
         y += 20
+
+        if self.arcade_mode == "Reversed":
+            screen.blit(font_small.render(
+                f"Level {self.reversed_level}/{REVERSED_MAX_LEVEL}  ({len(self.rivals)} hunting)", True, GOLD), (x, y))
+            y += 20
 
         if self.ghost_trail:
             point = self.ghost_point()
@@ -3850,63 +4311,261 @@ class Game:
         hint = font_tiny.render(self._hint("Scroll or drag the bar   Right-click: back"), True, TEXT_DIM)
         screen.blit(hint, (SCREEN_W - hint.get_width() - 20, SCREEN_H - 30))
 
+    def _shop_tab_items(self) -> List[str]:
+        tab = SHOP_TABS[self.shop_tab]
+        if tab == "Trails":
+            return TRAIL_NAMES
+        if tab == "Skins":
+            return SKIN_NAMES
+        return ["Arcade"]  # Extras - more one-time unlocks land here later (secret shop, etc.)
+
+    def _set_shop_tab(self, i: int) -> None:
+        self.shop_tab = i % len(SHOP_TABS)
+        self.shop_index = 0
+        self.shop_scroll = 0.0
+        self.sounds.play(self.sounds.menu_move)
+
+    SHOP_ROW_H = 44
+
+    def _shop_layout(self) -> Tuple[pygame.Rect, float]:
+        """The shop list's scrolling viewport and the total height of its content."""
+        view = pygame.Rect(SCREEN_W // 2 - 230, 150, 560, SCREEN_H - 150 - 46)
+        return view, len(self._shop_tab_items()) * self.SHOP_ROW_H
+
+    def _shop_scroll_by(self, delta: float) -> None:
+        view, content_h = self._shop_layout()
+        self.shop_scroll = max(0.0, min(max(0.0, content_h - view.h), self.shop_scroll + delta))
+
+    def _shop_ensure_visible(self, index: int) -> None:
+        view, content_h = self._shop_layout()
+        row_top = index * self.SHOP_ROW_H
+        if row_top < self.shop_scroll:
+            self.shop_scroll = row_top
+        elif row_top + self.SHOP_ROW_H > self.shop_scroll + view.h:
+            self.shop_scroll = row_top + self.SHOP_ROW_H - view.h
+        self.shop_scroll = max(0.0, min(max(0.0, content_h - view.h), self.shop_scroll))
+
     def draw_shop(self) -> None:
         self._draw_backdrop()
         t = font_big.render("SHOP", True, ACCENT)
-        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 40))
-        wallet_r = font_mid.render(f"Wallet: {self.wallet} coins", True, GOLD)
-        screen.blit(wallet_r, (SCREEN_W // 2 - wallet_r.get_width() // 2, 90))
-        hint_r = font_tiny.render("Trails leave a glowing streak behind your snake for the whole run.", True, TEXT_DIM)
-        screen.blit(hint_r, (SCREEN_W // 2 - hint_r.get_width() // 2, 124))
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 36))
+        self._draw_back_button()
+        wallet_r = font_small.render(f"Wallet: {self.wallet} coins", True, GOLD)
+        screen.blit(wallet_r, (SCREEN_W // 2 - wallet_r.get_width() // 2, 78))
 
-        items = TRAIL_NAMES + ["Back"]
-        y = 150
+        tab_w, tab_h, gap = 150, 32, 8
+        x0 = SCREEN_W // 2 - (len(SHOP_TABS) * tab_w + (len(SHOP_TABS) - 1) * gap) // 2
+        for i, name in enumerate(SHOP_TABS):
+            rect = pygame.Rect(x0 + i * (tab_w + gap), 108, tab_w, tab_h)
+            active = i == self.shop_tab
+            over = ui.hovered(rect)
+            gfx.draw.rect(screen, ui.PANEL_HOVER if (active or over) else ui.PANEL, rect, border_radius=8)
+            if active:
+                gfx.draw.rect(screen, ACCENT, (rect.x + 10, rect.bottom - 3, rect.w - 20, 3), border_radius=2)
+            label = font_small.render(name, True, TEXT if active else TEXT_DIM)
+            screen.blit(label, (rect.centerx - label.get_width() // 2, rect.centery - label.get_height() // 2 - 1))
+            self._hot(rect, click=lambda i=i: self._set_shop_tab(i))
+
+        tab = SHOP_TABS[self.shop_tab]
+        items = self._shop_tab_items()
+        view, content_h = self._shop_layout()
+        self._shop_scroll_by(0)  # re-clamp after a tab switch shrinks the list
+        scroll_adjust = lambda d: self._shop_scroll_by(-d * self.SHOP_ROW_H)
+        self._hot(view, adjust=scroll_adjust)
+        screen.set_clip((0, view.y, SCREEN_W, view.h))  # full width: don't clip the row-highlight ornaments
+        y = view.y + 6 - int(self.shop_scroll)
         for i, name in enumerate(items):
-            selected = i == self.shop_index
-            prefix = "  "
-            row = pygame.Rect(SCREEN_W // 2 - 230, y - 4, 560, 40)
-            self._list_row(row, "shop_index", i)
-            if name == "Back":
-                color = ACCENT if selected else TEXT
-                screen.blit(font_mid.render(prefix + "Back", True, color), (SCREEN_W // 2 - 200, y))
-                y += 44
+            if y + 40 < view.top or y > view.bottom:
+                y += self.SHOP_ROW_H
                 continue
-
-            spec = TRAIL_EFFECTS[name]
-            owned = name in self.owned_trails
-            equipped = name == self.equipped_trail
-            if equipped:
-                status = "[EQUIPPED]"
-                status_color = GREEN
-            elif owned:
-                status = "[owned - Enter to equip]"
-                status_color = TEXT_DIM
-            else:
-                status = f"[{spec['cost']} coins - Enter to buy]"
-                status_color = GOLD if self.wallet >= spec["cost"] else DANGER
-
+            selected = i == self.shop_index
+            row = pygame.Rect(SCREEN_W // 2 - 230, y - 4, 560, 40)
+            self._list_row(row, "shop_index", i, adjust=scroll_adjust)
             color = ACCENT if selected else TEXT
-            label = font_mid.render(f"{prefix}{name}", True, color)
-            screen.blit(label, (SCREEN_W // 2 - 200, y))
-
+            screen.blit(font_mid.render(f"  {name}", True, color), (SCREEN_W // 2 - 200, y))
             cx = SCREEN_W // 2 + 60
-            if spec["color"] == "rainbow":
-                t_anim = pygame.time.get_ticks() / 1000.0
-                hue = (t_anim * 0.3) % 1.0
-                r, g, b = colorsys.hsv_to_rgb(hue, 0.85, 1.0)
-                gfx.draw.circle(screen, (int(r * 255), int(g * 255), int(b * 255)), (cx, y + 12), 9)
-            elif spec["color"] is not None:
-                gfx.draw.circle(screen, spec["color"], (cx, y + 12), 9)
-            else:
-                gfx.draw.circle(screen, (90, 90, 100), (cx, y + 12), 9, width=2)
+
+            if tab == "Trails":
+                spec = TRAIL_EFFECTS[name]
+                owned = name in self.owned_trails
+                equipped = name == self.equipped_trail
+                if equipped:
+                    status, status_color = "[EQUIPPED]", GREEN
+                elif owned:
+                    status, status_color = "[owned - Enter to equip]", TEXT_DIM
+                else:
+                    status = f"[{spec['cost']} coins - Enter to buy]"
+                    status_color = GOLD if self.wallet >= spec["cost"] else DANGER
+                if spec["color"] == "rainbow":
+                    t_anim = pygame.time.get_ticks() / 1000.0
+                    hue = (t_anim * 0.3) % 1.0
+                    r, g, b = colorsys.hsv_to_rgb(hue, 0.85, 1.0)
+                    gfx.draw.circle(screen, (int(r * 255), int(g * 255), int(b * 255)), (cx, y + 12), 9)
+                elif spec["color"] is not None:
+                    gfx.draw.circle(screen, spec["color"], (cx, y + 12), 9)
+                else:
+                    gfx.draw.circle(screen, (90, 90, 100), (cx, y + 12), 9, width=2)
+
+            elif tab == "Skins":
+                req = SKIN_UNLOCK_REQUIREMENT[name]
+                cost = SKIN_SHOP_COST.get(name)
+                equipped = SKIN_NAMES[self.skin_idx] == name
+                if equipped:
+                    status, status_color = "[EQUIPPED]", GREEN
+                elif self._skin_available(name):
+                    status, status_color = "[unlocked - Enter to equip]", TEXT_DIM
+                elif cost is not None:
+                    status = f"[{cost} coins - Enter to buy]"
+                    status_color = GOLD if self.wallet >= cost else DANGER
+                else:
+                    status, status_color = f"[Locked - {ACHIEVEMENTS_BY_ID[req].name}]", TEXT_DIM
+                gfx.draw.circle(screen, SNAKE_SKINS[name][0], (cx, y + 12), 9)
+
+            else:  # Extras
+                if self.arcade_unlocked:
+                    status, status_color = "[UNLOCKED]", GREEN
+                else:
+                    status = f"[{ARCADE_COST} coins - Enter to unlock]"
+                    status_color = GOLD if self.wallet >= ARCADE_COST else DANGER
 
             status_r = font_tiny.render(status, True, status_color)
             screen.blit(status_r, (SCREEN_W // 2 + 90, y + 6))
-            y += 44
+            y += self.SHOP_ROW_H
+        screen.set_clip(None)
 
-        foot = font_tiny.render("Click a trail to buy or equip it   Right-click: back", True, TEXT_DIM)
+        if content_h > view.h:
+            track = pygame.Rect(view.right + 4, view.y, 10, view.h)
+            thumb = ui.draw_scrollbar(screen, track, self.shop_scroll, content_h, view.h)
+            span = max(1, track.h - thumb.h)
+            self._hot(track.inflate(10, 0), drag=lambda pos: self._shop_scroll_by(
+                (pos[1] - track.y - thumb.h / 2) / span * (content_h - view.h) - self.shop_scroll))
+
+        foot = font_tiny.render(self._hint("Click to buy/equip   Tab: switch tabs   Esc: back"), True, TEXT_DIM)
         screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
-        self._draw_back_button()
+
+    def _arcade_best_text(self, name: str) -> str:
+        best = self.arcade_best.get(name)
+        if not best:
+            return "Best: -"
+        if name == "Food Rush":
+            return f"Best: {int(best)}"
+        if name in ("Hunter Gauntlet", "Reversed"):
+            return f"Best: {best:0.1f}s"
+        return f"Best: {best:0.1f}s to spare"  # Maze Escape
+
+    def draw_arcade(self) -> None:
+        self._draw_backdrop()
+        t = font_big.render("ARCADE", True, ACCENT)
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 40))
+
+        if not self.arcade_unlocked:
+            msg = font_mid.render(f"Locked - unlock it in the Shop for {ARCADE_COST} coins", True, TEXT_DIM)
+            screen.blit(msg, (SCREEN_W // 2 - msg.get_width() // 2, SCREEN_H // 2 - 20))
+            self._draw_back_button()
+            foot = font_tiny.render(self._hint("Esc: back"), True, TEXT_DIM)
+            screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
+            return
+
+        wallet_r = font_small.render(f"Wallet: {self.wallet} coins", True, GOLD)
+        screen.blit(wallet_r, (SCREEN_W // 2 - wallet_r.get_width() // 2, 90))
+
+        items = ARCADE_MODES + ["Back"]
+        card_w = 560
+        x = SCREEN_W // 2 - card_w // 2
+        y = 126
+        for i, name in enumerate(items):
+            selected = i == self.arcade_index
+            if name == "Back":
+                row = pygame.Rect(x, y, card_w, 40)
+                self._list_row(row, "arcade_index", i)
+                color = ACCENT if selected else TEXT
+                screen.blit(font_mid.render("  Back", True, color), (x, y))
+                y += 44
+                continue
+
+            card_h = 68
+            row = pygame.Rect(x, y, card_w, card_h)
+            self._list_row(row, "arcade_index", i)
+            gfx.draw.rect(screen, (26, 29, 40), row, border_radius=10)
+            gfx.draw.rect(screen, ACCENT if selected else (48, 52, 66), row, width=2, border_radius=10)
+            screen.blit(font_mid.render(name, True, TEXT), (x + 20, y + 8))
+            desc_r = font_tiny.render(MODE_DESC.get(name, ""), True, TEXT_DIM)
+            screen.blit(desc_r, (x + 20, y + 40))
+            best_r = font_small.render(self._arcade_best_text(name), True, GOLD)
+            screen.blit(best_r, (x + card_w - best_r.get_width() - 20, y + 26))
+            y += card_h + 10
+
+        foot = font_tiny.render(self._hint("Click or Enter: play   Esc: back"), True, TEXT_DIM)
+        screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 30))
+
+    def handle_arcade_key(self, key) -> None:
+        if not self.arcade_unlocked:
+            if key == pygame.K_ESCAPE:
+                self.state = STATE_MENU
+            return
+        items = ARCADE_MODES + ["Back"]
+        n = len(items)
+        if key in (pygame.K_UP, pygame.K_w):
+            self.arcade_index = (self.arcade_index - 1) % n
+            self.sounds.play(self.sounds.menu_move)
+        elif key in (pygame.K_DOWN, pygame.K_s):
+            self.arcade_index = (self.arcade_index + 1) % n
+            self.sounds.play(self.sounds.menu_move)
+        elif key == pygame.K_ESCAPE:
+            self.state = STATE_MENU
+        elif key == pygame.K_RETURN:
+            name = items[self.arcade_index]
+            if name == "Back":
+                self.state = STATE_MENU
+                return
+            self.sounds.play(self.sounds.menu_select)
+            self.start_arcade(name)
+
+    def _arcade_value_text(self, name: str, value: float, won: bool) -> str:
+        if name == "Food Rush":
+            return f"Score: {int(value)}"
+        if name == "Hunter Gauntlet":
+            return f"Survived {value:0.1f}s"
+        if name == "Reversed":
+            return f"Survived {value:0.1f}s - reached level {self.reversed_level}"
+        return f"Escaped with {value:0.1f}s to spare" if won else "Didn't make it out in time"
+
+    def draw_arcade_result(self) -> None:
+        self._draw_backdrop()
+        res = self.arcade_result
+        name = res.get("name", "")
+        won = res.get("won", False)
+        if name == "Maze Escape":
+            title, title_color = ("ESCAPED!", GREEN) if won else ("TIME'S UP", DANGER)
+        else:
+            title, title_color = "RUN OVER", ACCENT
+        t = font_big.render(title, True, title_color)
+        screen.blit(t, (SCREEN_W // 2 - t.get_width() // 2, 110))
+
+        name_r = font_mid.render(name, True, TEXT)
+        screen.blit(name_r, (SCREEN_W // 2 - name_r.get_width() // 2, 170))
+
+        value_r = font_mid.render(self._arcade_value_text(name, res.get("value", 0.0), won), True, GOLD)
+        screen.blit(value_r, (SCREEN_W // 2 - value_r.get_width() // 2, 212))
+
+        if res.get("new_best"):
+            nb = font_small.render("NEW BEST!", True, GREEN)
+            screen.blit(nb, (SCREEN_W // 2 - nb.get_width() // 2, 250))
+
+        if name == "Reversed":
+            credit = font_tiny.render(REVERSED_CREDIT, True, TEXT_DIM)
+            screen.blit(credit, (SCREEN_W // 2 - credit.get_width() // 2, 290))
+
+        foot = font_small.render(self._hint("Enter: play again   Esc: back to Arcade"), True, TEXT_DIM)
+        screen.blit(foot, (SCREEN_W // 2 - foot.get_width() // 2, SCREEN_H - 40))
+
+    def handle_arcade_result_key(self, key) -> None:
+        if key == pygame.K_RETURN:
+            self.start_arcade(self.arcade_result.get("name", ARCADE_MODES[0]))
+        elif key == pygame.K_ESCAPE:
+            self.arcade_mode = None
+            self.arcade_index = 0
+            self.state = STATE_ARCADE
 
     def draw_lan_menu(self) -> None:
         self._draw_backdrop()
@@ -4452,6 +5111,15 @@ class Game:
             pts.append((cx + rad * math.cos(ang), cy + rad * math.sin(ang)))
         return pts
 
+    @staticmethod
+    def _idle_wobble(gx: int, gy: int, now: float) -> Tuple[float, float]:
+        """Small per-cell bob + pulse so food/power-ups/hazards read as alive on the
+        board instead of static icons; the per-cell phase desyncs neighbours so the
+        whole board doesn't breathe in lockstep."""
+        phase = (gx * 7 + gy * 13) % 10
+        wave = now * 2.2 + phase
+        return math.sin(wave) * 1.3, 1.0 + 0.06 * math.sin(wave * 1.15)
+
     def _draw_downerup_icon(self, surface: pygame.Surface, kind: str, cx: float, cy: float, radius: float = 7) -> None:
         if self._sprite_icon(surface, f"hz_{kind}", cx, cy, radius):
             return
@@ -4829,6 +5497,7 @@ class Game:
     # ---------- input ----------
 
     def handle_menu_key(self, key) -> None:
+        self._track_mustache_code(key)
         n = len(MENU_ITEMS)
         # Easter egg: only the literal Down arrow counts (not the WASD "s"
         # alias) - any other key breaks the streak.
@@ -4887,6 +5556,9 @@ class Game:
             elif choice == "Shop":
                 self.shop_index = 0
                 self.state = STATE_SHOP
+            elif choice == "Arcade":
+                self.arcade_index = 0
+                self.state = STATE_ARCADE
             elif choice == "Settings":
                 self.prev_state = STATE_MENU
                 self.settings_index = 0
@@ -5097,37 +5769,84 @@ class Game:
                     self.online_code_input += ch
 
     def handle_shop_key(self, key) -> None:
-        items = TRAIL_NAMES + ["Back"]
+        items = self._shop_tab_items()
         n = len(items)
         if key in (pygame.K_UP, pygame.K_w):
             self.shop_index = (self.shop_index - 1) % n
+            self._shop_ensure_visible(self.shop_index)
             self.sounds.play(self.sounds.menu_move)
         elif key in (pygame.K_DOWN, pygame.K_s):
             self.shop_index = (self.shop_index + 1) % n
+            self._shop_ensure_visible(self.shop_index)
             self.sounds.play(self.sounds.menu_move)
+        elif key == pygame.K_TAB:
+            self._set_shop_tab(self.shop_tab + (-1 if pygame.key.get_mods() & pygame.KMOD_SHIFT else 1))
         elif key == pygame.K_ESCAPE:
             self.state = STATE_MENU
         elif key == pygame.K_RETURN:
             name = items[self.shop_index]
-            if name == "Back":
-                self.state = STATE_MENU
-                return
-            spec = TRAIL_EFFECTS[name]
-            if name == self.equipped_trail:
-                return
-            if name in self.owned_trails:
-                self.equipped_trail = name
-                self.sounds.play(self.sounds.menu_select)
-                self.save_wallet()
-            elif self.wallet >= spec["cost"]:
-                self.wallet -= spec["cost"]
-                self.owned_trails.add(name)
-                self.equipped_trail = name
+            tab = SHOP_TABS[self.shop_tab]
+            if tab == "Trails":
+                self._buy_or_equip_trail(name)
+            elif tab == "Skins":
+                self._buy_or_equip_skin(name)
+            else:
+                self._buy_extra(name)
+
+    def _buy_or_equip_trail(self, name: str) -> None:
+        spec = TRAIL_EFFECTS[name]
+        if name == self.equipped_trail:
+            return
+        if name in self.owned_trails:
+            self.equipped_trail = name
+            self.sounds.play(self.sounds.menu_select)
+            self.save_wallet()
+        elif self.wallet >= spec["cost"]:
+            self.wallet -= spec["cost"]
+            self.owned_trails.add(name)
+            self.equipped_trail = name
+            self.sounds.play(self.sounds.unlock)
+            self.save_wallet()
+            self._unlock("fashionista")
+            if all(t in self.owned_trails for t in TRAIL_NAMES):
+                self._unlock("collector")
+
+    def _skin_available(self, name: str) -> bool:
+        """True if this skin can be equipped for free right now - no payment needed because
+        it's either got no gate at all (Classic), its achievement is already earned, or it
+        was already bought. A skin with req=None but a SKIN_SHOP_COST entry (Crimson etc.)
+        is NOT free just because it has no achievement - it still needs buying once."""
+        req = SKIN_UNLOCK_REQUIREMENT[name]
+        free = req is None and SKIN_SHOP_COST.get(name) is None
+        return free or (req is not None and req in self.tracker.unlocked) or name in self.owned_skins
+
+    def _buy_or_equip_skin(self, name: str) -> None:
+        if SKIN_NAMES[self.skin_idx] == name:
+            return
+        if self._skin_available(name):
+            self.skin_idx = SKIN_NAMES.index(name)
+            self.sounds.play(self.sounds.menu_select)
+            return
+        cost = SKIN_SHOP_COST.get(name)
+        if cost is not None and self.wallet >= cost:
+            self.wallet -= cost
+            self.owned_skins.add(name)
+            self.skin_idx = SKIN_NAMES.index(name)
+            self.sounds.play(self.sounds.unlock)
+            self.save_wallet()
+            self._unlock("skin_shopper")
+            all_unlocked = all(self._skin_available(n) for n in SKIN_NAMES)
+            if all_unlocked:
+                self._unlock("skin_collector")
+
+    def _buy_extra(self, name: str) -> None:
+        if name == "Arcade":
+            if not self.arcade_unlocked and self.wallet >= ARCADE_COST:
+                self.wallet -= ARCADE_COST
+                self.arcade_unlocked = True
                 self.sounds.play(self.sounds.unlock)
                 self.save_wallet()
-                self._unlock("fashionista")
-                if all(t in self.owned_trails for t in TRAIL_NAMES):
-                    self._unlock("collector")
+                self._unlock("arcade_found")
 
     def handle_initials_key(self, key) -> None:
         if key == pygame.K_UP:
@@ -5151,6 +5870,19 @@ class Game:
             letter = chr(key).upper()
             self.pending_initials[self.initials_cursor] = letter
             self.initials_cursor = (self.initials_cursor + 1) % 3
+
+    def _track_mustache_code(self, key) -> None:
+        name = pygame.key.name(key)
+        ch = name if len(name) == 1 and name.isalpha() else ""
+        self.mustache_typed = (self.mustache_typed + ch)[-len(MUSTACHE_CODE):]
+        if self.mustache_typed == MUSTACHE_CODE:
+            self.mustache_typed = ""
+            # One-way for the rest of this process: there's no "type it again to shave" -
+            # a relaunch is the only way back, same spirit as the Down-arrow easter egg
+            # not re-asking once the secret shop's already been found.
+            if not self.mustache_mode:
+                self.mustache_mode = True
+                self._unlock("mustachioed")
 
     def handle_playing_key(self, key) -> None:
         if self.lan_role != "client" and self.death_pause_timer > 0:
@@ -5185,7 +5917,24 @@ class Game:
 
         cfg = self.mode_cfg()
         is_lan_host = self.lan_role == "host"
-        if cfg["coop"]:
+        if cfg.get("manual_move"):
+            # Maze Escape: no auto-advance (see update_playing's matching guard) - every
+            # arrow/WASD/hjkl press is one grid step, so the maze can be read and planned
+            # like a puzzle instead of forcing a snake-game pace onto it.
+            d = None
+            if key in (pygame.K_UP, pygame.K_w, pygame.K_k):
+                d = (0, -1)
+            elif key in (pygame.K_DOWN, pygame.K_s, pygame.K_j):
+                d = (0, 1)
+            elif key in (pygame.K_LEFT, pygame.K_a, pygame.K_h):
+                d = (-1, 0)
+            elif key in (pygame.K_RIGHT, pygame.K_d, pygame.K_l):
+                d = (1, 0)
+            if d is not None:
+                self._p1_set_direction(d)
+                self.move_accum = 0.0
+                self._tick()
+        elif cfg["coop"]:
             # hjkl are vim-style alternates for Player 1's arrows (not WASD,
             # which is already Player 2's local-coop control scheme).
             if key in (pygame.K_UP, pygame.K_k):
@@ -5539,7 +6288,8 @@ class Game:
                 self._press(pygame.K_p)
             return
         if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
-            self.setting_set("fullscreen", not self.settings["fullscreen"])
+            cur = self.settings["screen_mode"]
+            self.setting_set("screen_mode", "Window" if cur == "Fullscreen" else "Fullscreen")
             return
         if event.type == pygame.TEXTINPUT:
             if self.chat_active:
@@ -5568,6 +6318,10 @@ class Game:
             self.handle_settings_key(key)
         elif self.state == STATE_SHOP:
             self.handle_shop_key(key)
+        elif self.state == STATE_ARCADE:
+            self.handle_arcade_key(key)
+        elif self.state == STATE_ARCADE_RESULT:
+            self.handle_arcade_result_key(key)
         elif self.state == STATE_ENTER_INITIALS:
             self.handle_initials_key(key)
         elif self.state == STATE_GAME_OVER:
@@ -5690,6 +6444,10 @@ class Game:
             self.draw_changelog()
         elif self.state == STATE_SHOP:
             self.draw_shop()
+        elif self.state == STATE_ARCADE:
+            self.draw_arcade()
+        elif self.state == STATE_ARCADE_RESULT:
+            self.draw_arcade_result()
         elif self.state == STATE_ENTER_INITIALS:
             self.draw_enter_initials()
         elif self.state == STATE_LAN_MENU:

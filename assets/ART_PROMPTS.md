@@ -103,6 +103,19 @@ flat coral tongue (#E8475A) with a deep fork, no outline."
 *In game:* it plays in under half a second from the head's mouth in all four directions. Keep the root on
 the left edge of every cell or it will jump around.
 
+### `ghost_sheet.png`: best-run ghost marker animation
+"A sprite sheet of ONE floating ghost animation on flat magenta, 8 equal square cells in a single row.
+A simple rounded-top ghost silhouette: a smooth dome head and a soft wavy 3-bump skirt along the bottom,
+no face, no eyes, no mouth. Flat off-white (#EEF2F7) fill with one pale cyan (#5CC8FF) shadow tone on the
+lower third, no outline. Across the 8 frames it plays one full gentle bob-and-drift loop: frame 1 neutral,
+2-3 drifting up as the skirt wave shifts left, 4 at the top of the bob, 5-6 drifting back down as the wave
+shifts right, 7 at the bottom of the bob, 8 easing back to frame 1 so the loop is seamless. Keep the dome's
+centre in the same spot in every cell (only the bob offset and skirt wave move) or it will jitter in place."
+*Fits the game because:* it replaces the plain translucent circle `Game._draw_ghost` currently draws in
+main.py to mark where your best previous run was at this point in the race - the game already applies the
+fade/translucency and the bob-cycle timing itself, so keep this art fully **opaque** on magenta like every
+other sheet; don't bake in any transparency or glow.
+
 ### `menu_bg.png`: main menu background (opaque, landscape 16:9)
 "A minimal night landscape made of flat layered shapes: four overlapping layers of soft rolling hills
 fading from teal (#1E5C66) in the back to charcoal navy (#0D0F14) in the front, a small pale off-white moon

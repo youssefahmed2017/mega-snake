@@ -37,6 +37,7 @@ ACHIEVEMENTS: List[Achievement] = [
     Achievement("ghost_walker", "Ghost Walker", "Pass through a wall using Ghost mode", lambda s: s["wall_phases"] >= 1),
     Achievement("survivor", "Survivor", "Survive 3 minutes in one run", lambda s: s["time_alive"] >= 180, "time_alive", 180),
     Achievement("trespasser", "Trespasser", "Found a place you weren't supposed to be", lambda s: False, hidden=True),
+    Achievement("mustachioed", "Fine Moustache", "Give your snake some class", lambda s: False, hidden=True),
 
     # --- skill & per-run feats ---
     Achievement("close_call", "Close Call", "Scrape past a wall or tail and live", lambda s: s.get("near_misses", 0) >= 1),
@@ -81,6 +82,20 @@ ACHIEVEMENTS: List[Achievement] = [
     Achievement("fashionista", "Fashionista", "Buy a trail in the shop", lambda s: False),
     Achievement("collector", "Collector", "Own every shop trail", lambda s: False),
     Achievement("record_breaker", "Record Breaker", "Beat your personal best in any mode", lambda s: False),
+    Achievement("arcade_found", "Arcade Found", "Unlock the arcade", lambda s: False),
+    Achievement("skin_shopper", "New Look", "Buy a skin in the shop", lambda s: False),
+    Achievement("skin_collector", "Wardrobe", "Unlock or buy every skin", lambda s: False),
+
+    # --- Arcade minigames ---
+    Achievement("food_rush_ace", "Rush Hour", "Score 150 in Food Rush",
+                lambda s: s.get("mode") == "Food Rush" and s.get("score", 0) >= 150),
+    Achievement("hunter_survivor", "Outfoxed", "Survive 20 seconds in Hunter Gauntlet",
+                lambda s: s.get("mode") == "Hunter Gauntlet" and s.get("time_alive", 0) >= 20),
+    Achievement("maze_master", "Maze Master", "Escape the Maze Escape minigame",
+                lambda s: s.get("mode") == "Maze Escape" and s.get("arcade_won", False)),
+    Achievement("not_the_apple", "Not The Apple", "Survive 60 seconds in Reversed",
+                lambda s: s.get("mode") == "Reversed" and s.get("time_alive", 0) >= 60),
+    Achievement("arcade_regular", "Arcade Regular", "Set a best in all three Arcade minigames", lambda s: False),
 ]
 
 ACHIEVEMENTS_BY_ID: Dict[str, Achievement] = {a.id: a for a in ACHIEVEMENTS}

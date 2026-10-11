@@ -48,15 +48,40 @@ SNAKE_SKINS = {
     "Void": [(190, 120, 255), (90, 40, 150)],
     "Ice": [(140, 220, 255), (60, 140, 220)],
     "Gold": [(255, 220, 100), (200, 160, 40)],
+    "Crimson": [(255, 90, 90), (170, 30, 30)],
+    "Shadow": [(130, 132, 145), (55, 56, 66)],
+    "Neon": [(255, 90, 220), (190, 30, 150)],
+    "Mint": [(140, 255, 210), (60, 190, 150)],
+    "Storm": [(150, 170, 235), (70, 85, 150)],
+    "Obsidian": [(110, 90, 140), (40, 30, 60)],
 }
 
-# Skin -> achievement id required to unlock it. None = always unlocked.
+# Skin -> achievement id required to unlock it (None = always unlocked, no achievement gate).
+# A skin with a requirement here AND a cost in SKIN_SHOP_COST below can be reached either way -
+# earn the achievement, or buy it if you'd rather skip the grind.
 SKIN_UNLOCK_REQUIREMENT = {
     "Classic": None,
     "Inferno": "century",
     "Void": "combo_15",
     "Ice": "survivor",
     "Gold": "half_k",
+    "Crimson": None,
+    "Shadow": None,
+    "Neon": None,
+    "Mint": None,
+    "Storm": None,
+    "Obsidian": None,
+}
+
+# Skin -> coin cost in the Shop. Only skins with no achievement requirement (or that you'd
+# rather not grind for) need to be here - Inferno/Void/Ice/Gold stay achievement-only.
+SKIN_SHOP_COST = {
+    "Crimson": 60,
+    "Mint": 60,
+    "Shadow": 80,
+    "Storm": 80,
+    "Neon": 100,
+    "Obsidian": 120,
 }
 
 FOOD_NORMAL = "normal"
@@ -179,7 +204,35 @@ MODE_CONFIG = {
                   events=True),
     "Roguelite": dict(wrap=False, powerups=True, obstacles=False, rivals=0, timer=None, coop=False, seeded=False,
                       speed_mult=1.0, events=True, perks=True),
+
+    # --- Arcade (unlocked in the Shop, picked from the Arcade list - never appear in the
+    # normal Mode cycle, see MODES above and Game.mode_name()). `arcade=True` tells
+    # _finalize_game_over to skip coins/quests/streak/leaderboard/ghosts entirely, and
+    # `food=False` skips the normal apple spawn for the two that don't use it.
+    "Food Rush": dict(wrap=True, powerups=False, obstacles=False, rivals=0, timer=18, coop=False, seeded=False,
+                      speed_mult=1.15, arcade=True),
+    "Hunter Gauntlet": dict(wrap=False, powerups=False, obstacles=False, rivals=0, timer=None, coop=False,
+                            seeded=False, speed_mult=1.0, arcade=True, food=False),
+    # manual_move: no auto-advance - every direction key press is one grid step (see
+    # Game.handle_playing_key / update_playing), so the maze plays like a puzzle instead
+    # of a race against the usual tick rate. Timer's a bit longer than the other two to
+    # account for the extra time stepping-and-thinking takes versus continuous movement.
+    "Maze Escape": dict(wrap=False, powerups=False, obstacles=False, rivals=0, timer=60, coop=False, seeded=False,
+                        speed_mult=1.0, arcade=True, food=False, manual_move=True),
+    # Reversed: you ARE the apple, snakes hunt you - see Game._setup_arcade/_reversed_spawn_point
+    # and the per-frame level-up check in update_playing. Concept credit: REVERSED_CREDIT below.
+    "Reversed": dict(wrap=False, powerups=False, obstacles=False, rivals=0, timer=None, coop=False,
+                     seeded=False, speed_mult=1.0, arcade=True, food=False),
 }
+
+ARCADE_COST = 1000
+ARCADE_MODES = ["Food Rush", "Hunter Gauntlet", "Maze Escape", "Reversed"]
+
+# "Reversed" arcade mode: level N spawns N hunter snakes (capped at the swarm size), one
+# more every REVERSED_LEVEL_SECONDS of survival.
+REVERSED_LEVEL_SECONDS = 12
+REVERSED_MAX_LEVEL = 10
+REVERSED_CREDIT = "Idea: ImBIOS's lab-snake-reverse (github.com/ImBIOS/lab-snake-reverse)"
 
 MODE_DESC = {
     "Classic": "Wrap around edges. Pure snake.",
@@ -191,6 +244,10 @@ MODE_DESC = {
     "Coop": "Local 2-player. Arrows + WASD, shared board.",
     "Daily": "Same layout and chaos events for everyone, today only.",
     "Roguelite": "Walls + chaos events. Pick a perk every 8 foods.",
+    "Food Rush": "Eat as much as you can in 18 seconds.",
+    "Hunter Gauntlet": "Survive the hunter snake as long as you can.",
+    "Maze Escape": "Find the exit before the clock runs out.",
+    "Reversed": "You're the apple. Outrun the snakes - they multiply every level.",
 }
 
 # LAN match setup: the host picks a ruleset (wrap/obstacle behavior) and a map
@@ -354,7 +411,9 @@ TRAIL_EFFECTS = {
     "Ember":  {"cost": 40,  "color": (255, 120, 40)},
     "Frost":  {"cost": 40,  "color": (140, 220, 255)},
     "Toxic":  {"cost": 60,  "color": (140, 255, 90)},
+    "Blossom": {"cost": 60, "color": (255, 140, 190)},
     "Royal":  {"cost": 80,  "color": (190, 120, 255)},
+    "Steel":  {"cost": 80,  "color": (165, 180, 205)},
     "Rainbow": {"cost": 150, "color": "rainbow"},
 }
 TRAIL_NAMES = list(TRAIL_EFFECTS.keys())
@@ -389,6 +448,11 @@ EASTER_WARNINGS = [
         "shake": 6,
     },
 ]
+
+# Easter egg: typing this on the main menu gives your own snake's head a cosmetic
+# mustache for every run after, one-way for the rest of this process (purely a local
+# rendering flourish, not synced in multiplayer).
+MUSTACHE_CODE = "mustache"
 
 SECRET_SHOP_ITEMS = [
     ("The Void", "???", "A skin made of pure nothing."),

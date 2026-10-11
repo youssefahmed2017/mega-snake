@@ -1,5 +1,11 @@
-# 🐍 Mega Snake Game!
+# 🐍 MEGA SNAKE
+
 <div align="center">
+
+[![Build](https://github.com/youssefahmed2017/mega-snake/actions/workflows/build.yml/badge.svg)](https://github.com/youssefahmed2017/mega-snake/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/youssefahmed2017/mega-snake)](https://github.com/youssefahmed2017/mega-snake/releases)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/youssefahmed2017/mega-snake/releases)
 
 <table>
   <tr>
@@ -17,13 +23,29 @@
 
 </div>
 
-
 Snake, but with way too many features: nine game modes, power-ups and downer-ups, chaos events, a roguelite
 perk mode, 45 achievements, daily quests, a coin shop, eight themed maps, ghost replays, gamepad support, and LAN or online multiplayer for up to four players.
 
 - **Play:** download the latest build for Windows, macOS or Linux from the
   [Releases page](https://github.com/youssefahmed2017/mega-snake/releases). The game updates itself from there.
 - **Website:** https://mega-snake-game.vercel.app
+
+## What's actually under the hood
+
+Most snake clones stop at "snake moves on a grid." This one doesn't:
+
+- **Authoritative multiplayer** — a host simulates the whole game; up to 3 guests (LAN or over a
+  Cloudflare Workers relay) just send inputs and render snapshots, with a jitter-adaptive playout buffer
+  so remote play stays smooth instead of jittery.
+- **Reconnect-with-token** — drop your connection mid-game and your seat is held for 20 seconds so you
+  can rejoin instead of losing the run.
+- **Self-updating builds** — an in-game updater checks GitHub Releases and replaces the running
+  executable on its own, no reinstall required.
+- **144p to 4K rendering** — everything is drawn in logical units and rescaled, so the same game looks
+  right at any resolution or window size.
+- **Full CI/CD** — every push builds Windows/macOS/Linux binaries via GitHub Actions; tagged releases
+  publish them automatically as permanent download URLs.
+- Achievements, quests, daily streaks, a shop, chaos events, and a roguelite perk mode on top of all that.
 
 ## Game modes
 

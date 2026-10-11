@@ -185,6 +185,34 @@ def prepare_tongue(frames: int = 10) -> None:
         save(f"tongue_{i}.png", canvas, max_dim=256)
 
 
+def prepare_ghost(frames: int = 8) -> None:
+    """ghost_sheet.png: `frames` floating-ghost poses, one continuous bob-and-drift loop read left to
+    right. The bob IS a vertical shift between frames, so - unlike split_blobs, which crops every sprite
+    to its own tight box and would cancel that shift right back out - every frame here is cut from one
+    shared vertical range; only the horizontal slice (and the shared canvas width) are per frame."""
+    rgba = key_magenta(load("ghost_sheet.png"))
+    solid = rgba[..., 3] > 40
+    labels, n = ndimage.label(ndimage.binary_dilation(solid, iterations=6))
+    if n != frames:
+        raise SystemExit(f"expected {frames} ghost frames, found {n}")
+    boxes = []
+    for i in range(1, n + 1):
+        ys, xs = np.where((labels == i) & solid)
+        boxes.append((ys.min(), ys.max() + 1, xs.min(), xs.max() + 1))
+    boxes.sort(key=lambda b: b[2])  # left to right
+    pad = 4
+    y0 = max(0, min(b[0] for b in boxes) - pad)
+    y1 = min(rgba.shape[0], max(b[1] for b in boxes) + pad)
+    width = max(b[3] - b[2] for b in boxes) + 2 * pad
+    for i, (by0, by1, bx0, bx1) in enumerate(boxes):
+        cx = (bx0 + bx1) // 2
+        x0, x1 = max(0, cx - width // 2), min(rgba.shape[1], cx - width // 2 + width)
+        ox = (width - (x1 - x0)) // 2
+        canvas = np.zeros((y1 - y0, width, 4))
+        canvas[:, ox:ox + (x1 - x0)] = rgba[y0:y1, x0:x1]
+        save(f"ghost_{i}.png", canvas, max_dim=160)
+
+
 def prepare_wall() -> None:
     """wall_tile.png has a fake grey/white 'transparent' checkerboard painted in."""
     rgb = load("wall_tile.png")
@@ -278,6 +306,7 @@ def main() -> None:
             print(f"  (skipped: no {source})")
 
     step("tongue", prepare_tongue, _tongue_source())
+    step("ghost", prepare_ghost, "ghost_sheet.png")
     step("wall", prepare_wall, "wall_tile.png")
     step("title", prepare_title, "title.png")
     step("sidebar", prepare_sidebar, "sidebar_bg.png")
