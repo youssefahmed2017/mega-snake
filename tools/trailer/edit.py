@@ -613,14 +613,14 @@ def clips_trailer(d: Path) -> Edit:
                         ("revive", 1.0, 1, "REVIVE YOUR TEAMMATE", None),
                         ("mode_coop", 2.0, 1, "OR CO-OP ON ONE KEYBOARD", None)])
     # ---- 9. PROGRESSION (build, 6 bars)
-    ini = S("initials").m("death", 1.5)
+    ini = S("initials").cue("death", 4.2)  # by ear: robust even if the clip's json is stale
     act("UNLOCK EVERYTHING", [("achievements", 0.3, 1, "45 ACHIEVEMENTS", None),
                               ("menu_skins", 0.4, 1, "SKINS", None),
                               ("shop", 0.4, 0.5, "SHOP", None),
                               ("trail_rainbow", 1.0, 0.5, "TRAILS", None),
                               ("quests", 0.3, 0.5, "DAILY QUESTS", None),
                               ("stats", 0.3, 0.5, "STATS", None),
-                              ("initials", ini + 1.6, 0.5, "LEADERBOARDS", None),
+                              ("initials", ini + 2.0, 0.5, "LEADERBOARDS", None),
                               ("leaderboard", 0.3, 0.5, "LEADERBOARDS", None),
                               ("ghost_replay", 1.5, 1, "RACE YOUR BEST RUN'S GHOST", None)])
     # ---- 10. POLISH (verse, 4 bars)

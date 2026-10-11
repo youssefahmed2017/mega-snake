@@ -149,9 +149,9 @@ class Recorder:
         ff.wait()
         dur = frame / FPS
         for t_abs, key in _sound_log:  # first time each sound plays = a free, exact cue point
-            name = self.sound_names.get(key)
-            if name:
-                self.markers.setdefault("snd_" + name, round(t_abs - start, 3))
+            snd = self.sound_names.get(key)
+            if snd:
+                self.markers.setdefault("snd_" + snd, round(t_abs - start, 3))
         self._write_wav(self.out_dir / f"{name}.wav", start, dur)
         meta = {"name": name, "duration": dur, "markers": self.markers, "died": death_at is not None,
                 "score": g.score, "reason": g.game_over_reason}
