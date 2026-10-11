@@ -19,7 +19,7 @@
 
 
 Snake, but with way too many features: nine game modes, power-ups and downer-ups, chaos events, a roguelite
-perk mode, achievements and quests, gamepad support, and LAN or online multiplayer for up to four players.
+perk mode, 45 achievements, daily quests, a coin shop, eight themed maps, ghost replays, gamepad support, and LAN or online multiplayer for up to four players.
 
 - **Play:** download the latest build for Windows, macOS or Linux from the
   [Releases page](https://github.com/youssefahmed2017/mega-snake/releases). The game updates itself from there.
@@ -39,7 +39,8 @@ perk mode, achievements and quests, gamepad support, and LAN or online multiplay
 | Daily | The same layout and chaos events for everyone, today only. |
 | Roguelite | Walls plus chaos events, and a pick-1-of-3 perk every 8 foods. |
 
-Multiplayer (LAN, or online through a small relay server) supports up to four players. The host runs the game;
+Multiplayer supports up to four players over LAN (type the host's IP) or online (share a 5-character room code; a small relay
+server connects you, and dropped players can reconnect). The host runs the game;
 everyone else sends inputs and draws what the host sends back.
 
 ## Controls
