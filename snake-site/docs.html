@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MEGA SNAKE Docs</title>
+<meta name="description" content="Full documentation for MEGA SNAKE: every mode, food, power-up, chaos event, perk, map, achievement, quest, setting, control and multiplayer option.">
+<style>
+  :root{
+    --bg:#0e1016;
+    --panel:#14161e;
+    --panel-2:#1a1d28;
+    --line:#262a38;
+    --text:#ebebf5;
+    --dim:#9299ab;
+    --accent:#5ac8ff;
+    --gold:#ffd250;
+    --green:#6ee68c;
+    --danger:#ff5a5a;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  body{-webkit-font-smoothing:antialiased;}
+
+  .wrap{max-width:980px;margin:0 auto;padding:0 20px;}
+
+  header.hero{
+    padding:72px 0 56px;
+    text-align:center;
+    background:
+      radial-gradient(circle at 50% 0%, rgba(90,200,255,0.12), transparent 60%),
+      var(--bg);
+    border-bottom:1px solid var(--line);
+  }
+  .badge{
+    display:inline-block;font-size:13px;letter-spacing:.04em;color:var(--dim);
+    background:var(--panel-2);border:1px solid var(--line);border-radius:999px;
+    padding:5px 14px;margin-bottom:22px;
+  }
+  .badge b{color:var(--gold);}
+  h1{
+    font-size:clamp(40px,8vw,72px);
+    margin:0 0 12px;
+    letter-spacing:.02em;
+    font-weight:800;
+    background:linear-gradient(135deg,#fff 20%,var(--accent) 100%);
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+  }
+  .tagline{font-size:clamp(16px,2.6vw,20px);color:var(--dim);margin:0 0 36px;}
+
+  .cta-row{display:flex;gap:14px;justify-content:center;flex-wrap:wrap;}
+  .btn{
+    display:inline-flex;align-items:center;gap:10px;
+    padding:15px 28px;border-radius:12px;font-weight:700;font-size:16px;
+    text-decoration:none;border:1px solid transparent;transition:transform .12s ease;
+  }
+  .btn:active{transform:scale(.97);}
+  .btn-primary{background:var(--accent);color:#04121c;}
+  .btn-secondary{background:var(--panel-2);color:var(--text);border-color:var(--line);}
+  .btn svg{width:18px;height:18px;flex:none;}
+
+  .meta{margin-top:18px;font-size:13px;color:var(--dim);}
+
+  .os-row{display:flex;gap:18px;justify-content:center;flex-wrap:wrap;margin-top:14px;}
+  .os-link{font-size:13px;color:var(--dim);text-decoration:none;border-bottom:1px dashed var(--line);}
+  .os-link:hover{color:var(--accent);border-bottom-color:var(--accent);}
+  .os-link.current{color:var(--text);border-bottom-color:var(--text);}
+
+  section{padding:64px 0;}
+  section h2{
+    font-size:clamp(24px,4vw,32px);margin:0 0 6px;font-weight:800;
+  }
+  section .lede{color:var(--dim);margin:0 0 36px;max-width:640px;}
+
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;}
+  .card{
+    background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:22px;
+  }
+  .card .icon{font-size:26px;margin-bottom:10px;display:block;}
+  .card h3{margin:0 0 8px;font-size:17px;}
+  .card p{margin:0;color:var(--dim);font-size:14px;line-height:1.55;}
+
+  .modes{display:flex;flex-wrap:wrap;gap:10px;}
+  .pill{
+    background:var(--panel-2);border:1px solid var(--line);border-radius:999px;
+    padding:8px 16px;font-size:14px;color:var(--text);
+  }
+  .pill b{color:var(--gold);}
+
+  .steps{counter-reset:step;list-style:none;margin:0;padding:0;
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;}
+  .steps li{
+    counter-increment:step;
+    background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:20px;position:relative;padding-left:56px;
+  }
+  .steps li::before{
+    content:counter(step);
+    position:absolute;left:18px;top:18px;
+    width:26px;height:26px;border-radius:8px;
+    background:var(--accent);color:#04121c;font-weight:800;
+    display:flex;align-items:center;justify-content:center;font-size:14px;
+  }
+  .steps li h3{margin:0 0 4px;font-size:15px;}
+  .steps li p{margin:0;color:var(--dim);font-size:13.5px;line-height:1.5;}
+
+  .note{
+    background:var(--panel-2);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px;font-size:13.5px;color:var(--dim);margin-top:24px;
+  }
+  .note b{color:var(--text);}
+
+  footer{
+    border-top:1px solid var(--line);padding:32px 0;text-align:center;
+    color:var(--dim);font-size:13px;
+  }
+  footer a{color:var(--dim);}
+  footer a.support{color:var(--gold);}
+  footer .links{margin-bottom:10px;}
+
+  code{background:var(--panel-2);border:1px solid var(--line);border-radius:6px;
+    padding:2px 6px;font-size:13px;color:var(--accent);}
+
+  nav.toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px;justify-content:center;}
+  nav.toc a{font-size:13px;color:var(--dim);text-decoration:none;background:var(--panel-2);
+    border:1px solid var(--line);border-radius:999px;padding:5px 12px;}
+  nav.toc a:hover{color:var(--accent);border-color:var(--accent);}
+  .topbar{padding:16px 0;border-bottom:1px solid var(--line);font-size:13px;}
+  .topbar a{color:var(--dim);text-decoration:none;margin-right:16px;}
+  .topbar a:hover{color:var(--accent);}
+  section{padding:48px 0;border-bottom:1px solid var(--line);}
+  section p,section li{color:var(--dim);font-size:14.5px;line-height:1.65;}
+  section p b,section li b{color:var(--text);}
+  section a{color:var(--accent);}
+  section ul{padding-left:20px;margin:8px 0;}
+  table{width:100%;border-collapse:collapse;margin:12px 0;font-size:14px;
+    background:var(--panel);border:1px solid var(--line);}
+  th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--dim);}
+  th{background:var(--panel-2);color:var(--text);font-size:13px;}
+  td:first-child{color:var(--text);font-weight:600;}
+  tr:last-child td{border-bottom:0;}
+  .tablewrap{overflow-x:auto;border-radius:12px;}
+</style>
+</head>
+<body>
+<div class="topbar"><div class="wrap"><a href="index.html">&larr; MEGA SNAKE</a><a href="https://github.com/youssefahmed2017/mega-snake/releases/latest">Download</a></div></div>
+<header class="hero" style="padding:48px 0 40px">
+  <div class="wrap">
+    <span class="badge">Docs for v<b>3.2.3</b></span>
+    <h1>HOW IT ALL WORKS</h1>
+    <p class="tagline" style="margin-bottom:0">Everything in the game, in one place.</p>
+    <nav class="toc"><a href="#start">Getting started</a><a href="#controls">Controls</a><a href="#modes">Game modes</a><a href="#scoring">Food, combos &amp; scoring</a><a href="#powerups">Power-ups, downer-ups &amp; portals</a><a href="#events">Chaos events</a><a href="#hardcore">Hardcore hazards</a><a href="#roguelite">Roguelite perks</a><a href="#maps">Maps</a><a href="#rivals">Battle rivals &amp; Coop</a><a href="#multiplayer">Multiplayer</a><a href="#progress">Coins, quests &amp; streaks</a><a href="#shop">Shop, skins &amp; trails</a><a href="#achievements">Achievements (45)</a><a href="#ghost">Ghost replay, stats &amp; leaderboard</a><a href="#settings">Settings</a><a href="#gamepad">Gamepad support</a><a href="#updates">Auto-updater &amp; saves</a><a href="#open">Open source &amp; support</a></nav>
+  </div>
+</header>
+<section id="start">
+  <div class="wrap">
+    <h2>Getting started</h2>
+<p>MEGA SNAKE is a free, single-file download for Windows, macOS and Linux. Get it from the <a href="https://github.com/youssefahmed2017/mega-snake/releases/latest">Releases page</a>.</p>
+<ul><li><b>Windows:</b> double-click. SmartScreen may warn since the app is unsigned: click &ldquo;More info&rdquo; &rarr; &ldquo;Run anyway.&rdquo;</li>
+<li><b>macOS:</b> unzip, drag <code>MegaSnake.app</code> into Applications (needed for auto-updates), then right-click &rarr; Open the first time.</li>
+<li><b>Linux:</b> <code>chmod +x MegaSnake-Linux &amp;&amp; ./MegaSnake-Linux</code></li>
+<li><b>From source:</b> <code>pip install -r requirements.txt</code> then <code>python main.py</code>.</li></ul>
+<p>The main menu has: Start Game, Mode, Skin, Multiplayer, Daily Quests, Shop, Settings, How to Play, Stats, Leaderboard, Achievements, Changelog, Check for Updates and Quit. The mouse works on every menu; the snake itself is keyboard or gamepad only.</p>
+  </div>
+</section>
+<section id="controls">
+  <div class="wrap">
+    <h2>Controls</h2>
+<div class="tablewrap"><table><tr><th>Action</th><th>Keyboard</th><th>Gamepad</th></tr><tr><td>Move</td><td>Arrows, WASD or hjkl</td><td>D-pad or left stick</td></tr><tr><td>Confirm (menus)</td><td>Enter</td><td>A</td></tr><tr><td>Phase Dash</td><td>Space</td><td>A</td></tr><tr><td>Back</td><td>Esc</td><td>B</td></tr><tr><td>Pause</td><td>P</td><td>Start</td></tr><tr><td>Quit to menu from Pause</td><td>Esc</td><td>Select</td></tr><tr><td>Settings tabs</td><td>Tab</td><td>LB / RB</td></tr><tr><td>Mute</td><td>M</td><td>&mdash;</td></tr><tr><td>Chat (multiplayer)</td><td>T</td><td>&mdash;</td></tr><tr><td>Fullscreen</td><td>F11</td><td>&mdash;</td></tr></table></div><p>Coop: P1 uses Arrows/hjkl, P2 uses WASD. Right-click acts as Esc in menus, and pauses or resumes during a run.</p>
+  </div>
+</section>
+<section id="modes">
+  <div class="wrap">
+    <h2>Game modes</h2>
+<div class="tablewrap"><table><tr><th>Mode</th><th>Rules</th></tr><tr><td>Classic</td><td>Edges wrap around. Power-ups on. Pure snake.</td></tr><tr><td>Walls</td><td>Edges kill you.</td></tr><tr><td>Maze</td><td>Walls, plus obstacles that keep growing over time.</td></tr><tr><td>Battle</td><td>Walls, plus two AI rival snakes that compete for your food.</td></tr><tr><td>Timed</td><td>60-second score attack. Edges wrap.</td></tr><tr><td>Hardcore</td><td>No power-ups, 35% faster, one life, with random hazards (see below).</td></tr><tr><td>Coop</td><td>Local two-player on a shared board. P1 uses Arrows/hjkl, P2 uses WASD.</td></tr><tr><td>Daily</td><td>Same layout and chaos events for everyone, today only. Each day features one event that comes round three times as often.</td></tr><tr><td>Roguelite</td><td>Walls plus chaos events, and a pick-1-of-3 perk every 8 foods.</td></tr></table></div><p>Pick a <b>map</b> before any match, in every mode. Speed rises with your score: a new speed tier every 60 points, up to tier 5. <b>Difficulty</b> in Settings scales speed on top of that.</p>
+  </div>
+</section>
+<section id="scoring">
+  <div class="wrap">
+    <h2>Food, combos &amp; scoring</h2>
+<div class="tablewrap"><table><tr><th>Food</th><th>Effect</th></tr><tr><td>Normal (red)</td><td>+10 &times; combo, grow by 1. About 85% of food.</td></tr><tr><td>Golden</td><td>+50, grow by 1 (about 3% of food; +100 during Gold Rush).</td></tr><tr><td>Speed (blue)</td><td>+10 and a 4-second speed boost.</td></tr><tr><td>Shrink (purple)</td><td>Lose 2 length and 5 points.</td></tr></table></div><p><b>Combos:</b> eat again within 2.6 seconds to chain a combo, up to <b>x20</b>. Normal food is worth 10 &times; your current combo. The combo drops back to 1 when the timer runs out.</p><p><b>Near misses:</b> scraping past a wall, obstacle or your own tail triggers a short slow-mo (toggle in Settings) and counts towards achievements.</p>
+  </div>
+</section>
+<section id="powerups">
+  <div class="wrap">
+    <h2>Power-ups, downer-ups &amp; portals</h2>
+<div class="tablewrap"><table><tr><th>Power-up</th><th>Effect</th></tr><tr><td>Ghost</td><td>Pass through walls and yourself for 6s.</td></tr><tr><td>Magnet</td><td>Auto-eats food within 3 tiles for 8s.</td></tr><tr><td>Shield</td><td>Survive one fatal hit; lasts 12s.</td></tr><tr><td>Slow-mo</td><td>Everything slows down for 5s.</td></tr><tr><td>2x Score</td><td>Double score for 10s.</td></tr><tr><td>Freeze</td><td>Rival snakes stop for 6s.</td></tr><tr><td>Teleport</td><td>Instantly eats the nearest food.</td></tr><tr><td>Revive</td><td>Brings a downed Coop/LAN teammate back. Only spawns while a teammate is down.</td></tr></table></div><div class="tablewrap"><table><tr><th>Downer-up</th><th>Effect</th></tr><tr><td>Bomb (ring)</td><td>Instant death unless you&rsquo;re shielded. Disappears after 10s.</td></tr><tr><td>Curse (X)</td><td>Reverses your controls for 4.5s.</td></tr></table></div><p><b>Portals</b> spawn as pairs and warp your whole snake to the other ring. Power-ups, downer-ups and portals are rare and spawn per second, so they don&rsquo;t depend on frame rate. Hardcore has no power-ups.</p>
+  </div>
+</section>
+<section id="events">
+  <div class="wrap">
+    <h2>Chaos events</h2>
+<p>Daily and Roguelite throw a rare surprise at you about every 1.5&ndash;2 minutes, announced with a 3-second warning. Events are solo-only.</p><div class="tablewrap"><table><tr><th>Event</th><th>Duration</th><th>What happens</th></tr><tr><td>Food Frenzy</td><td>10s</td><td>Food everywhere. Eat, eat, eat!</td></tr><tr><td>Gold Rush</td><td>12s</td><td>All food is golden and worth double.</td></tr><tr><td>Blackout</td><td>12s</td><td>The lights are out. Trust your head.</td></tr><tr><td>Mirror Mode</td><td>8s</td><td>Controls reversed!</td></tr><tr><td>Hunter</td><td>14s</td><td>A hunter snake is after you.</td></tr><tr><td>Earthquake</td><td>9s</td><td>The ground cracks and rubble drops. It&rsquo;s cleared when the event ends.</td></tr></table></div><p>In Daily the schedule is seeded by the date, so everyone sees the same events at the same moments.</p>
+  </div>
+</section>
+<section id="hardcore">
+  <div class="wrap">
+    <h2>Hardcore hazards</h2>
+<p>Hardcore rolls a chance every second for one hazard at a time (none in the first 12 seconds; the chance doubles by 2.5 minutes in, with a 5-second breather after each).</p><div class="tablewrap"><table><tr><th>Hazard</th><th>Duration</th><th>What happens</th></tr><tr><td>Meteor Strike</td><td>1.8s</td><td>Dodge the red warning zone!</td></tr><tr><td>Meteor Shower</td><td>5s</td><td>Four strikes, one after another.</td></tr><tr><td>Tremor</td><td>6s</td><td>The ground shakes and food slides down.</td></tr><tr><td>Speed Surge</td><td>8s</td><td>Everything gets faster.</td></tr><tr><td>Rockfall</td><td>9s</td><td>Rubble drops from above.</td></tr></table></div>
+  </div>
+</section>
+<section id="roguelite">
+  <div class="wrap">
+    <h2>Roguelite perks</h2>
+<p>Every 8 foods the run freezes and offers a choice of 3 perks. Picking one (or using a clutch save like Shield or Second Wind) starts a 3-2-1 countdown so you can re-aim. Most perks stack.</p><div class="tablewrap"><table><tr><th>Perk</th><th>Effect</th></tr><tr><td>Second Wind</td><td>Survive one fatal crash.</td></tr><tr><td>Magnet Field</td><td>Food within a few cells drifts into you.</td></tr><tr><td>Gourmet</td><td>+25% score from every food.</td></tr><tr><td>Midas Touch</td><td>+50% coins at the end of the run.</td></tr><tr><td>Featherweight</td><td>The snake moves 8% slower.</td></tr><tr><td>Lucky Charm</td><td>Power-ups show up far more often.</td></tr><tr><td>Combo Keeper</td><td>Combos last 1s longer.</td></tr><tr><td>Phase Dash</td><td>Space / A: phase through everything for 1.2s (10s cooldown). Only one per run.</td></tr></table></div>
+  </div>
+</section>
+<section id="maps">
+  <div class="wrap">
+    <h2>Maps</h2>
+<div class="tablewrap"><table><tr><th>Map</th><th>Look</th></tr><tr><td>Open</td><td>No obstacles.</td></tr><tr><td>Pillars</td><td>A grid of single-block pillars.</td></tr><tr><td>Cross</td><td>Horizontal and vertical walls with gaps to slip through.</td></tr><tr><td>Arena</td><td>A walled ring with gaps in the middle of each side.</td></tr><tr><td>Volcano</td><td>A crater ring plus scattered lava rock. Dark red tint, drifting embers.</td></tr><tr><td>Everest</td><td>A jagged mountain ridge. Icy tint, falling snow.</td></tr><tr><td>Desert</td><td>Dunes. Warm tint, blowing sand.</td></tr><tr><td>Glacier</td><td>Ice crystals. Blue tint, sparkles.</td></tr></table></div>
+  </div>
+</section>
+<section id="rivals">
+  <div class="wrap">
+    <h2>Battle rivals &amp; Coop</h2>
+<p><b>Battle</b> adds two AI snakes that go after your food; Freeze stops them. <b>Coop</b> is local two-player on a shared board with a shared score, and a Revive power-up appears when one player is down.</p>
+  </div>
+</section>
+<section id="multiplayer">
+  <div class="wrap">
+    <h2>Multiplayer</h2>
+<p>Up to <b>4 players</b>. The host&rsquo;s game is the only real simulation; everyone else sends inputs and draws what the host sends back.</p>
+<ul><li><b>Host LAN Game / Join LAN Game:</b> the host picks a ruleset (Classic, Walls or Maze) and a map, then guests type the IP shown on the host&rsquo;s screen.</li>
+<li><b>Host Online Game / Join Online Game:</b> the host gets a 5-character room code. Guests enter it, and a small relay server connects everyone. A player who drops keeps their seat for 20 seconds and can reconnect.</li>
+<li><b>Chat:</b> press T during a match.</li>
+<li><b>Compatibility:</b> builds from 1.9.2 onwards can play together; for the smoothest result everyone should be on 3.2.3 or newer.</li></ul>
+  </div>
+</section>
+<section id="progress">
+  <div class="wrap">
+    <h2>Coins, quests &amp; streaks</h2>
+<p>Each finished run pays <b>score &divide; 10</b> coins (Midas Touch adds 50%). Playing on consecutive days builds a <b>streak</b> with a bonus. Every day three new <b>Daily Quests</b> are picked from this pool, each paying coins once:</p><div class="tablewrap"><table><tr><th>Quest</th><th>Coins</th></tr><tr><td>Eat 15 food in one run</td><td>25</td></tr><tr><td>Eat 30 food in one run</td><td>45</td></tr><tr><td>Reach a 6x combo</td><td>30</td></tr><tr><td>Reach a 10x combo</td><td>50</td></tr><tr><td>Eat a golden apple</td><td>20</td></tr><tr><td>Eat 3 golden apples in one run</td><td>45</td></tr><tr><td>Score 150 in one run</td><td>30</td></tr><tr><td>Score 300 in one run</td><td>55</td></tr><tr><td>Survive 60 seconds</td><td>25</td></tr><tr><td>Survive 2 minutes</td><td>45</td></tr><tr><td>Reach length 20</td><td>35</td></tr><tr><td>Pick up 3 power-ups in one run</td><td>30</td></tr><tr><td>Score 100 in Maze mode</td><td>40</td></tr><tr><td>Score 100 in Walls mode</td><td>35</td></tr><tr><td>Score 80 in Battle mode</td><td>40</td></tr><tr><td>Travel through a portal</td><td>20</td></tr></table></div>
+  </div>
+</section>
+<section id="shop">
+  <div class="wrap">
+    <h2>Shop, skins &amp; trails</h2>
+<p>Spend coins on cosmetic trails. Buying one and owning all of them are both achievements.</p><div class="tablewrap"><table><tr><th>Trail</th><th>Cost</th></tr><tr><td>None</td><td>Free</td></tr><tr><td>Ember</td><td>40 coins</td></tr><tr><td>Frost</td><td>40 coins</td></tr><tr><td>Toxic</td><td>60 coins</td></tr><tr><td>Royal</td><td>80 coins</td></tr><tr><td>Rainbow</td><td>150 coins (animated)</td></tr></table></div><p>Skins are unlocked through achievements rather than bought:</p><div class="tablewrap"><table><tr><th>Skin</th><th>Unlocked by</th></tr><tr><td>Classic</td><td>Always available</td></tr><tr><td>Inferno</td><td>Century (score 100)</td></tr><tr><td>Void</td><td>Combo Master (15x combo)</td></tr><tr><td>Ice</td><td>Survivor (3 minutes in one run)</td></tr><tr><td>Gold</td><td>High Roller (score 500)</td></tr></table></div><p>The snake is drawn as head, body, corner and tail sprites, recoloured per skin. Colour-blind mode uses recoloured vector icons instead.</p>
+  </div>
+</section>
+<section id="achievements">
+  <div class="wrap">
+    <h2>Achievements (45)</h2>
+<p>Live progress bars show how close you are. A real-time &ldquo;New Personal Best&rdquo; banner appears mid-run.</p><div class="tablewrap"><table><tr><th>Achievement</th><th>How to earn it</th></tr><tr><td>First Blood</td><td>Eat your first food</td></tr><tr><td>Gourmand</td><td>Eat 50 food in one run</td></tr><tr><td>Combo Starter</td><td>Reach a 5x combo</td></tr><tr><td>Combo Master</td><td>Reach a 15x combo</td></tr><tr><td>Golden Touch</td><td>Eat a golden apple</td></tr><tr><td>Bomb Defused</td><td>Survive a bomb with a shield</td></tr><tr><td>Long Boi</td><td>Reach length 30</td></tr><tr><td>Century</td><td>Score 100 points</td></tr><tr><td>High Roller</td><td>Score 500 points</td></tr><tr><td>Speed Demon</td><td>Reach max speed tier</td></tr><tr><td>Ghost Walker</td><td>Pass through a wall using Ghost mode</td></tr><tr><td>Survivor</td><td>Survive 3 minutes in one run</td></tr><tr><td>???</td><td>Hidden. Go looking for a place you shouldn&rsquo;t be.</td></tr><tr><td>Close Call</td><td>Scrape past a wall or tail and live</td></tr><tr><td>Edge Lord</td><td>Get 10 near misses in one run</td></tr><tr><td>Golden Trio</td><td>Eat 3 golden apples in one run</td></tr><tr><td>Fully Charged</td><td>Pick up 5 power-ups in one run</td></tr><tr><td>Portal Hopper</td><td>Travel through 3 portals in one run</td></tr><tr><td>Bomb Squad</td><td>Survive 3 bombs in one run</td></tr><tr><td>Poltergeist</td><td>Phase through walls 5 times in one run</td></tr><tr><td>Maxed Out</td><td>Reach a 20x combo</td></tr><tr><td>Longer Boi</td><td>Reach length 50</td></tr><tr><td>Legend</td><td>Score 1000 points</td></tr><tr><td>Marathon</td><td>Survive 5 minutes in one run</td></tr><tr><td>Maze Runner</td><td>Score 100 in Maze mode</td></tr><tr><td>Wall Crawler</td><td>Score 100 in Walls mode</td></tr><tr><td>Battle Hardened</td><td>Score 80 in Battle mode</td></tr><tr><td>Beat the Clock</td><td>Score 150 in Timed mode</td></tr><tr><td>No Safety Net</td><td>Score 100 in Hardcore mode</td></tr><tr><td>Daily Driver</td><td>Score 50 in a Daily run</td></tr><tr><td>Chaos Survivor</td><td>Live through 3 chaos events in one run</td></tr><tr><td>Fully Loaded</td><td>Pick 5 perks in one Roguelite run</td></tr><tr><td>Duck and Cover</td><td>Dodge 8 meteors in one Hardcore run</td></tr><tr><td>Build Master</td><td>Score 150 in Roguelite mode</td></tr><tr><td>Regular</td><td>Play 10 games</td></tr><tr><td>Veteran</td><td>Play 50 games</td></tr><tr><td>Food Hoarder</td><td>Eat 250 food in total</td></tr><tr><td>Bottomless Pit</td><td>Eat 1000 food in total</td></tr><tr><td>On a Roll</td><td>Play 3 days in a row</td></tr><tr><td>Dedicated</td><td>Play 7 days in a row</td></tr><tr><td>Quest Clear</td><td>Finish all daily quests in one day</td></tr><tr><td>Tinkerer</td><td>Change a setting</td></tr><tr><td>Fashionista</td><td>Buy a trail in the shop</td></tr><tr><td>Collector</td><td>Own every shop trail</td></tr><tr><td>Record Breaker</td><td>Beat your personal best in any mode</td></tr></table></div>
+  </div>
+</section>
+<section id="ghost">
+  <div class="wrap">
+    <h2>Ghost replay, stats &amp; leaderboard</h2>
+<p>Every mode remembers your best run and replays it as a faint ghost so you can see whether you&rsquo;re ahead or behind (toggle in Settings). The <b>Leaderboard</b> is an arcade top-10 with 3-letter initials, and <b>Stats</b> shows your lifetime totals and bests.</p>
+  </div>
+</section>
+<section id="settings">
+  <div class="wrap">
+    <h2>Settings</h2>
+<div class="tablewrap"><table><tr><th>Tab</th><th>Settings</th></tr><tr><td>Audio</td><td>Master Volume, Mute, Menu Sounds</td></tr><tr><td>Gameplay</td><td>Difficulty (Easy 0.85x / Normal / Hard 1.25x speed), Pause When Unfocused, On-Screen Callouts, Near-Miss Slow-Mo, Ghost Replay</td></tr><tr><td>Display</td><td>Resolution (144p, 360p, 480p, 720p, 1080p, 4K), Fullscreen, Screen Fades, Screen Shake, Shake Strength, Particles (Off/Low/Full), Grid Lines, Color Blind Mode, Show FPS</td></tr><tr><td>Controller</td><td>Controller Input, Stick Sensitivity (Low/Normal/High), Vibration, Vibration Strength</td></tr></table></div><p>Color Blind Mode switches food, power-up and downer-up colours to the Okabe-Ito palette. Bombs keep a ring and curses keep an X, so they never rely on colour alone.</p>
+  </div>
+</section>
+<section id="gamepad">
+  <div class="wrap">
+    <h2>Gamepad support</h2>
+<p>Xbox and PlayStation pads work through SDL&rsquo;s standard mapping. D-pad or left stick moves, A confirms, B goes back, Start pauses. B never abandons a run. The menu footer hints switch to pad buttons automatically. Stick sensitivity and vibration are in Settings &rarr; Controller; the pad buzzes when you eat, die or are saved by a shield.</p>
+  </div>
+</section>
+<section id="updates">
+  <div class="wrap">
+    <h2>Auto-updater &amp; saves</h2>
+<p>On launch the game checks GitHub Releases for a newer version and offers to download and install it (&ldquo;Check for Updates&rdquo; does the same on demand). itch.io builds turn this off because the store updates the game.</p><p>Progress (coins, achievements, leaderboard, settings) saves to <code>.megasnake/save.json</code> in your user folder; ghosts are in <code>ghosts.json</code> beside it.</p>
+  </div>
+</section>
+<section id="open">
+  <div class="wrap">
+    <h2>Open source &amp; support</h2>
+<p>MEGA SNAKE is free software under the <b>GNU GPL v3.0 only</b>. Source: <a href="https://github.com/youssefahmed2017/mega-snake">GitHub</a>. Art is under the same license; the fonts (Lilita One and Varela Round) stay under the SIL Open Font License. If you enjoy it, you can optionally chip in on <a href="https://ko-fi.com/youssefahmedabdou">Ko-fi</a>.</p><p>There may be a secret or two hiding in the main menu. We won&rsquo;t say where.</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="links">
+      Free software (GPL-3.0) &middot;
+      <a href="https://github.com/youssefahmed2017/mega-snake" rel="noopener">Source code</a> &middot;
+      <a class="support" href="https://ko-fi.com/youssefahmedabdou" target="_blank" rel="noopener">Support on Ko-fi</a>
+    </div>
+    Built as a hobby project with Claude Code. Not affiliated with any other Snake game, past or present.
+  </div>
+</footer>
+</body>
+</html>
