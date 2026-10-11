@@ -170,6 +170,7 @@ class LanGuests:
         g.lan_online = False
         g.map_idx = MAP_NAMES.index("Arena")
         g.lan_setup_index = 2  # Start Hosting
+        g.local_ip = "192.168.1.20"  # the recorder has no LAN; show what a player would see
         g.state = P.STATE_LAN_SETUP
         g.handle_lan_setup_key(pygame.K_RETURN)
 
@@ -185,9 +186,13 @@ class LanGuests:
                     self.links.append((c, c.link))
         for _, link in self.links:
             link.poll()  # drain snapshots
-        if t >= 3.6 and g.state == P.STATE_LAN_HOST_WAIT and "lan_start" not in rec.markers:
+        if (t >= 3.6 and g.state == P.STATE_LAN_HOST_WAIT and "lan_start" not in rec.markers
+                and len(g.lan_host.roster) >= 4):
             rec.mark("lan_start", t)
             g.handle_lan_host_wait_key(pygame.K_RETURN)
+            for p in g.players:
+                if p is not None:
+                    p.grow(6)
 
     def steer(self, g, i):
         if i == 0:
@@ -216,12 +221,12 @@ def scenes():
 
     # --- chaos (the hook and the finale)
     add("chaos_max", 9, start("Hardcore", "Volcano", "Inferno", grow=22),
-        chain(force_event(EVENT_FRENZY, 0.0, 0.3), stack_event(EVENT_HUNTER, 0.6), hazard(HAZARD_SHOWER, 1.0),
-              stack_event(EVENT_GOLD_RUSH, 1.8), stack_event(EVENT_QUAKE, 2.6), hazard(HAZARD_SURGE, 3.4),
-              stack_event(EVENT_MIRROR, 4.2)), preroll=6, seed=31)
+        chain(force_event(EVENT_FRENZY, 0.0, 0.3), hazard(HAZARD_SHOWER, 0.6), stack_event(EVENT_GOLD_RUSH, 1.4),
+              stack_event(EVENT_QUAKE, 2.2), hazard(HAZARD_SURGE, 3.0), stack_event(EVENT_MIRROR, 3.8)),
+        preroll=6, seed=31)
     add("chaos_battle", 8, start("Battle", "Arena", "Void", grow=16),
         chain(force_event(EVENT_FRENZY, 0.0, 0.3), stack_event(EVENT_GOLD_RUSH, 0.8), hazard(HAZARD_SHOWER, 1.2),
-              stack_event(EVENT_HUNTER, 2.0), activate(P.POWERUP_MAGNET, 2.6)), preroll=4, seed=32)
+              activate(P.POWERUP_MAGNET, 2.0), stack_event(EVENT_QUAKE, 2.8)), preroll=4, seed=32)
     add("chaos_dark", 8, start("Roguelite", "Pillars", "Ice", grow=14),
         chain(force_event(EVENT_BLACKOUT, 0.0, 0.3), stack_event(EVENT_HUNTER, 0.5), hazard(HAZARD_SHOWER, 1.0),
               stack_event(EVENT_QUAKE, 2.0)), preroll=4, seed=33)
@@ -311,7 +316,7 @@ def scenes():
         menu_steps({0.8: key("handle_lan_menu_key", pygame.K_DOWN), 1.4: key("handle_lan_menu_key", pygame.K_DOWN),
                     2.0: key("handle_lan_menu_key", pygame.K_DOWN)}))
     lan = LanGuests()
-    add("lan_4p", 12, lan.setup, lan.each, steer=lan.steer, seed=120, after=lan.close)
+    add("lan_4p", 14, lan.setup, lan.each, steer=lan.steer, seed=120, after=lan.close)
 
     # --- progression and polish
     add("trail_rainbow", 6, start("Classic", "Open", "Void", grow=12,
@@ -319,8 +324,8 @@ def scenes():
     add("ghost_seed", 5, start("Walls", "Open", "Classic", grow=4), preroll=6, seed=131,
         bot=Bot(suicide_after=3.0), tail_after_death=5)
     add("ghost_replay", 7, start("Walls", "Open", "Inferno"), seed=132)
-    add("initials", 4, start("Walls", "Open", "Gold", grow=30), preroll=12, seed=133,
-        bot=Bot(suicide_after=1.5), tail_after_death=7)
+    add("initials", 6, start("Walls", "Open", "Gold", grow=30), preroll=12, seed=133,
+        bot=Bot(suicide_after=0.5), tail_after_death=7)
     add("achievements", 4, screen(P.STATE_ACHIEVEMENTS),
         once("scroll", 1.4, lambda g, t, rec: g._ach_scroll_by(220)))
     add("shop", 4, screen(P.STATE_SHOP, shop_index=0),
@@ -355,7 +360,19 @@ if __name__ == "__main__":
         after = kw.pop("after", None)
         if only and name not in only:
             continue
-        rec.scene(name, seconds, setup, each, **kw)
+        tries = 0
+        while True:
+            meta = rec.scene(name, seconds, setup, each, **kw)
+            bot = kw.get("bot")
+            planned = bot is not None and bot.suicide_after is not None
+            early = meta["died"] and not planned and meta["markers"].get("death", 99) < seconds * 0.9
+            if not early or tries >= 7:
+                break
+            tries += 1  # the bot died by accident: same scene, different luck
+            kw["seed"] = kw.get("seed", 1) + 1000
+            if bot is not None:
+                bot._last.clear()
+            print(f"    retrying {name} (died at {meta['markers']['death']:.1f}s)", flush=True)
         if after:
             after(rec.game)
         rec.game.colorblind = False

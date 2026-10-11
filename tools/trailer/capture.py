@@ -74,6 +74,10 @@ class Recorder:
         self.game = main.Game()
         self.game.settings["show_fps"] = False
         self.game.ghost_enabled = False
+        sb = self.game.sounds
+        self.sound_names = {id(v): k for k, v in vars(sb).items() if isinstance(v, pygame.mixer.Sound)}
+        for i, snd in enumerate(sb.combo_scale):
+            self.sound_names[id(snd)] = f"combo{i + 2}"
 
     def scene(self, name: str, seconds: float, setup: Callable, each: Optional[Callable] = None,
               bot: Optional[Bot] = None, tail_after_death: float = 2.5, seed: int = 1, preroll: float = 0.0,
@@ -144,9 +148,13 @@ class Recorder:
         ff.stdin.close()
         ff.wait()
         dur = frame / FPS
+        for t_abs, key in _sound_log:  # first time each sound plays = a free, exact cue point
+            name = self.sound_names.get(key)
+            if name:
+                self.markers.setdefault("snd_" + name, round(t_abs - start, 3))
         self._write_wav(self.out_dir / f"{name}.wav", start, dur)
         meta = {"name": name, "duration": dur, "markers": self.markers, "died": death_at is not None,
-                "score": g.score}
+                "score": g.score, "reason": g.game_over_reason}
         (self.out_dir / f"{name}.json").write_text(json.dumps(meta, indent=1))
         print(f"  {name}: {dur:.1f}s  score={g.score}  markers={self.markers}", flush=True)
         return meta

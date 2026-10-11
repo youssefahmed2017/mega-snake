@@ -89,6 +89,17 @@ class Source:
     def m(self, key: str, default: float = 0.0) -> float:
         return self.meta.get("markers", {}).get(key, default)
 
+    def cue(self, sound: str, default: float = 0.0) -> float:
+        """First time a game sound plays in this clip: the recorder's marker if it wrote one,
+        else found by ear (footage.find_events on the clip's own audio)."""
+        if "snd_" + sound in self.meta.get("markers", {}):
+            return self.meta["markers"]["snd_" + sound]
+        if not hasattr(self, "_found"):
+            import footage
+            self._found = footage.find_events(self.audio)
+        hits = self._found.get(sound)
+        return hits[0] if hits else default
+
 
 class FrameReader:
     """Decodes a range of source frames (scaled/padded to 1920x1080) with ffmpeg."""
@@ -129,6 +140,7 @@ class Cap:
     t0: float = 0.0
     t1: Optional[float] = None
     color: Tuple[int, int, int] = WHITE
+    pop: bool = True            # False: no pop-in (a caption carried over from the previous shot)
 
 
 @dataclass
@@ -212,6 +224,7 @@ STYLES = {  # font, size (at 1080 tall/wide reference), stroke, y (0..1), color 
     "tag": (HEAD_FONT, 84, 8, 0.84),
     "sub": (BODY_FONT, 52, 6, 0.88),
     "small": (BODY_FONT, 40, 5, 0.93),
+    "chapter": (HEAD_FONT, 44, 5, 0.055),
 }
 
 
@@ -226,7 +239,7 @@ class Layout:
         if self.vertical:
             size = int(size * (0.86 if style != "stat" else 0.9))
             y = {"big": 0.16, "hook": 0.73, "hooksub": 0.82, "stat": 0.5, "tag": 0.80, "sub": 0.86,
-                 "small": 0.93}[style]
+                 "small": 0.93, "chapter": 0.075}[style]
         return path, size, stroke, y
 
 
@@ -245,8 +258,9 @@ def draw_caps(out: pygame.Surface, shot: Shot, tl: float, L: Layout) -> None:
             k = L.W * 0.94 / widest
             surfs = [pygame.transform.smoothscale_by(x, k) for x in surfs]
         # pop in: overshoot then settle; fade the last 0.12 s
-        pop = 1.0 + 0.35 * math.exp(-age * 18) * math.cos(age * 30) if c.style not in ("hook", "hooksub", "sub", "small") else 1.0
-        alpha = min(1.0, age / 0.08) * min(1.0, (t1 - tl) / 0.1)
+        still = c.style in ("hook", "hooksub", "sub", "small", "chapter") or not c.pop
+        pop = 1.0 if still else 1.0 + 0.35 * math.exp(-age * 18) * math.cos(age * 30)
+        alpha = (min(1.0, age / 0.08) if c.pop else 1.0) * min(1.0, (t1 - tl) / 0.1)
         total_h = sum(s.get_height() for s in surfs) * 0.92
         cy = y * L.H - total_h / 2
         for s in surfs:
@@ -491,18 +505,20 @@ def beats(n: float) -> float:
 # ---------------------------------------------------------------- the clips trailer
 
 def clips_trailer(d: Path) -> Edit:
-    def S(name: str) -> Source:
-        meta = json.loads((d / f"{name}.json").read_text())
-        kind = "ui" if name in ("menu", "lan_menu", "achievements", "shop") else "game"
-        return Source(d / f"{name}.mp4", d / f"{name}.wav", meta, kind)
+    """The full ~2 minute trailer: a chaos cold open, then every feature, act by act,
+    each act cut to its own section of the music."""
+    from constants import MODE_DESC
+    from events import EVENTS, HAZARDS
 
-    death = S("death_wall")
-    dt = death.m("death")
-    menu, battle, meteors, hunter = S("menu"), S("battle"), S("hardcore_meteors"), S("hunter")
-    blackout, quake, mirror, perks, coop = S("blackout"), S("quake"), S("mirror"), S("perks"), S("coop")
-    gold, frenzy, ghost = S("classic_goldrush"), S("frenzy_magnet"), S("ghost_walls")
-    ach, shop, lan = S("achievements"), S("shop"), S("lan_menu")
-    maps = [S(f"map_{m}") for m in ("open", "pillars", "cross", "arena", "volcano", "everest", "desert", "glacier")]
+    cache: Dict[str, Source] = {}
+
+    def S(name: str) -> Source:
+        if name not in cache:
+            meta = json.loads((d / f"{name}.json").read_text())
+            ui = name.startswith(("menu", "lan_menu", "achievements", "shop", "quests", "stats", "leaderboard",
+                                  "settings", "howto", "changelog", "update", "easter"))
+            cache[name] = Source(d / f"{name}.mp4", d / f"{name}.wav", meta, "ui" if ui else "game")
+        return cache[name]
 
     shots: List[Shot] = []
     sfx: List[Tuple[float, np.ndarray, float]] = []
@@ -514,71 +530,141 @@ def clips_trailer(d: Path) -> Edit:
         T[0] += s.dur
         return s
 
-    # 1. HOOK - cold open on the run that's about to go very wrong
-    sfx.append((0.0, music.drone(6.4), 0.9))
-    add(Shot(death, dt - 2.9, 2.6, zoom=(1.0, 1.1), caps=[Cap("this run was going GREAT", "hooksub", 0.3, 2.4)]))
-    sfx.append((T[0], music.record_scratch(), 1.0))
-    add(Shot(death, dt - 0.3, 2.8, freeze=True, fx="freeze", zoom=(1.1, 1.22),
-             caps=[Cap("*record scratch*", "small", 0.0, 0.8), Cap("yep. that's me.", "hook", 0.25),
-                   Cap("you're probably wondering how I got here.", "hooksub", 1.0)]))
-    sfx.append((T[0], music.rewind(1.25), 1.0))
-    add(Shot(death, dt - 0.3, 0.5, speed=6, reverse=True, fx="vhs", audio_gain=0))
-    add(Shot(meteors, 8.5, 0.4, speed=8, reverse=True, fx="vhs", audio_gain=0))
-    add(Shot(battle, 9.5, 0.35, speed=8, reverse=True, fx="vhs", audio_gain=0))
+    def act(chapter: str, items, punch: float = 0.06, flash: float = 0.1):
+        """items: (clip, source time, length in bars, caption, subcaption)"""
+        for i, (name, t0, bars, cap, sub) in enumerate(items):
+            src = S(name)
+            caps = [Cap(chapter, "chapter", color=ACCENT, pop=i == 0)]
+            if cap:
+                caps.append(Cap(cap, "big"))
+            if sub:
+                caps.append(Cap(sub, "sub", 0.15))
+            add(Shot(src, max(0.0, t0), bars * BAR, punch=punch, flash=flash if i == 0 else flash * 0.6, caps=caps,
+                     audio_gain=0.8))
 
-    # 2. TITLE SLAM - the music starts here
+    def es(name: str) -> float:
+        return S(name).m("event_start", 1.0)
+
+    # ---- 1. COLD OPEN: pure chaos on a drop, no context
+    sfx.append((0.0, music.impact(), 1.0))
+    pov = "POV: you just wanted to play Snake"
+    hook = [("chaos_max", 1.2, 2), ("chaos_battle", 1.6, 2), ("chaos_dark", 1.4, 2), ("hz_shower", 1.4, 1),
+            ("chaos_max", 3.0, 1), ("ev_hunter", es("ev_hunter") + 1.5, 1), ("chaos_battle", 3.4, 1),
+            ("hz_rockfall", 0.8, 1), ("ev_quake", es("ev_quake") + 0.2, 1), ("chaos_dark", 3.4, 1),
+            ("chaos_max", 3.5, 0.5), ("ev_mirror", es("ev_mirror") + 0.3, 0.5), ("chaos_battle", 4.2, 0.5),
+            ("hz_surge", 1.5, 0.5), ("ev_blackout", es("ev_blackout") + 1.0, 0.5), ("chaos_max", 2.5, 0.5)]
+    for i, (name, t0, b) in enumerate(hook):
+        add(Shot(S(name), t0, b * BEAT, punch=0.09, shake=14 if i == 0 else 0, flash=0.15 if i == 0 else 0,
+                 audio_gain=0.7, caps=[Cap(pov, "big", pop=i == 0)]))
+    mus.append((0.0, music.song([("drop", 4, False)]), 1.0))
+
+    # ---- 2. HARD STOP: it started as just snake
+    sfx.append((T[0], music.record_scratch(), 1.0))
+    add(Shot(S("calm_snake"), 0.6, 3.0, audio_gain=1.0, caps=[Cap("it started as just snake.", "hook", 0.35)]))
+    sfx.append((T[0], music.riser(1.5), 0.9))
+    add(Shot(None, 0, 1.5, caps=[Cap("then I kept adding stuff.", "hook", 0.1)]))
+
+    # ---- 3. TITLE
     title_t = T[0]
     sfx.append((title_t, music.impact(), 1.0))
-    add(Shot(menu, 0.4, BAR * 2, flash=0.5, shake=18, zoom=(1.0, 1.05), fx="dim", audio_gain=0.6,
+    add(Shot(S("menu"), 0.4, BAR * 2, flash=0.5, shake=18, zoom=(1.0, 1.05), fx="dim", audio_gain=0.5,
              overlay=logo_overlay("the snake game that got WAY out of hand")))
 
-    # 3. FEATURES - one bar each, caption on the downbeat
-    feats = [
-        (battle, 2.6, "AI RIVALS STEAL YOUR FOOD"),
-        (meteors, meteors.m("hz_shower") + 0.1, "METEOR SHOWERS. IN SNAKE."),
-        (hunter, hunter.m("event_start") - 0.2, "SOMETHING IS HUNTING YOU"),
-        (blackout, blackout.m("event_start") - 0.15, "LIGHTS OUT"),
-        (quake, quake.m("event_start") - 0.15, "EARTHQUAKES"),
-        (mirror, mirror.m("event_start") - 0.1, "CONTROLS? REVERSED."),
-        (perks, perks.m("perk", 1.0) - 0.4, "PICK YOUR PERKS"),
-        (coop, 3.0, "CO-OP + ONLINE, UP TO 4 PLAYERS"),
-    ]
-    for src, t0, cap in feats:
-        add(Shot(src, max(0.0, t0), BAR, punch=0.06, flash=0.1, caps=[Cap(cap, "big", 0.0)]))
-
-    # 4. DROP - montage on the beat
+    # ---- 4. THE BASICS (verse, 9 bars)
+    act("THE BASICS", [
+        ("food_types", S("food_types").cue("golden", 0.6) - 0.5, 1, "GOLDEN, SPEED + SHRINK FOOD", None),
+        ("combo", 1.2, 1, "CHAIN COMBOS", "every bite climbs the scale"),
+        ("near_miss", max(0.0, S("near_miss").cue("near_miss", 1.2) - 0.7), 1, "NEAR MISSES SLOW TIME", None),
+        ("portals", max(0.0, S("portals").cue("portal", 1.5) - 1.0), 1, "PORTALS", None),
+        ("pu_ghost", S("pu_ghost").cue("powerup", 0.6) - 0.2, 0.5, "GHOST", None),
+        ("pu_magnet", S("pu_magnet").cue("powerup", 0.6) - 0.1, 0.5, "MAGNET", None),
+        ("pu_slowmo", S("pu_slowmo").cue("powerup", 0.6) - 0.1, 0.5, "SLOW-MO", None),
+        ("pu_mult2x", S("pu_mult2x").cue("powerup", 0.6) - 0.1, 0.5, "2X SCORE", None),
+        ("pu_freeze", S("pu_freeze").cue("freeze", 0.6) - 0.2, 0.5, "FREEZE", "rivals stop dead"),
+        ("pu_teleport", S("pu_teleport").cue("teleport", 0.6) - 0.3, 0.5, "TELEPORT", None),
+        ("pu_shield", 1.0, 1, "SHIELD = CLUTCH SAVE", None),
+        ("bomb_defused", 0.4, 0.5, "BOMBS", None),
+        ("curse", max(0.0, S("curse").cue("curse", 0.8) - 0.3), 0.5, "CURSES", "controls flipped"),
+    ])
+    # ---- 5. NINE MODES (build, 9 bars, riser)
+    modes = ["Classic", "Walls", "Maze", "Battle", "Timed", "Hardcore", "Coop", "Daily", "Roguelite"]
+    act("9 MODES", [(f"mode_{m.lower()}", 0.5, 1, ("CO-OP" if m == "Coop" else m.upper()), MODE_DESC[m])
+                    for m in modes])
+    # ---- 6. CHAOS (drop, 9 bars)
     sfx.append((T[0], music.impact(), 0.8))
-    names = ["OPEN", "PILLARS", "CROSS", "ARENA", "VOLCANO", "EVEREST", "DESERT", "GLACIER"]
-    for i, (src, nm) in enumerate(zip(maps, names)):
-        add(Shot(src, 0.6, beats(1), punch=0.05, flash=0.08 if i == 0 else 0.0,
-                 caps=[Cap(nm, "tag", 0.0, color=GOLD), Cap("8 MAPS", "big", 0.0)]))
-    add(Shot(gold, gold.m("event_start") - 0.1, beats(2), punch=0.06, caps=[Cap("GOLD RUSH", "big", color=GOLD)]))
-    add(Shot(frenzy, frenzy.m("pu_magnet"), beats(2), punch=0.06, caps=[Cap("FOOD FRENZY + MAGNET", "big")]))
-    add(Shot(ghost, ghost.m("pu_ghost") + 0.4, beats(2), punch=0.06, caps=[Cap("GHOST THROUGH WALLS", "big")]))
-    add(Shot(meteors, meteors.m("hz_rockfall") - 0.1, beats(2), punch=0.06, shake=10, caps=[Cap("ROCKFALL", "big")]))
-    for src, t0, cap, fx in ((gold, 5.0, "9 MODES", "dim"), (maps[4], 1.0, "8 MAPS", "dim"),
-                             (blackout, 3.0, "6 CHAOS EVENTS", "dim"), (ach, 0.5, "45 ACHIEVEMENTS", "blur")):
-        add(Shot(src, t0, beats(2), punch=0.08, fx=fx, audio_gain=0.5, caps=[Cap(cap, "stat", color=GOLD)]))
-    add(Shot(shop, 0.5, beats(2), punch=0.05, caps=[Cap("SKINS + TRAILS", "big")]))
-    add(Shot(lan, 0.5, beats(2), punch=0.05, caps=[Cap("PLAY ONLINE WITH FRIENDS", "big")]))
-    flurry = [(battle, 6.0), (frenzy, 3.0), (hunter, 3.5), (coop, 6.5), (gold, 3.0), (quake, 4.0), (ghost, 2.0),
-              (meteors, 3.5)]
-    for src, t0 in flurry:
-        add(Shot(src, t0, beats(0.5), punch=0.1))
-
-    # 5. PAYOFF - back to the freeze frame, and the music just... stops
-    pay_t = T[0]
-    sfx.append((pay_t, music.whoosh(0.5, up=False), 0.8))
-    add(Shot(death, dt - 2.4, 2.4 + 4.6, caps=[Cap("so anyway...", "hooksub", 0.2, 2.2),
-                                              Cap("...that's how I got here.", "hook", 2.6, 5.4)]))
-    # 6. END CARD
+    act("CHAOS EVENTS", [(f"ev_{e}", es(f"ev_{e}") - 0.25, 1, EVENTS[e].name, EVENTS[e].desc)
+                         for e in ("frenzy", "gold_rush", "blackout", "mirror", "hunter", "quake")], punch=0.08)
+    act("HARDCORE HAZARDS", [(f"hz_{h}", 0.15, 1 if h == "shower" else 0.5, HAZARDS[h].name, HAZARDS[h].desc)
+                             for h in ("shower", "meteor", "tremor", "surge", "rockfall")], punch=0.08)
+    # ---- 7. ROGUELITE + MAPS (break, 5 bars, riser)
+    act("ROGUELITE", [("perk_pick", S("perk_pick").m("perk", 1.5) - 0.3, 1.5, "PICK A PERK EVERY 8 FOODS", None),
+                      ("perk_dash", 0.7, 0.75, "PHASE DASH", None),
+                      ("perk_second_wind", 1.0, 0.75, "SECOND WIND", "survive one fatal crash")])
+    act("8 MAPS", [(f"map_{m}", 0.8, 0.25, None, None) for m in
+                   ("open", "pillars", "cross", "arena", "volcano", "everest", "desert", "glacier")],
+        punch=0.05, flash=0.0)
+    for i, m in enumerate(("OPEN", "PILLARS", "CROSS", "ARENA", "VOLCANO", "EVEREST", "DESERT", "GLACIER")):
+        shots[-8 + i].caps.append(Cap(m, "tag", color=GOLD))
+    # ---- 8. MULTIPLAYER (verse, 6 bars)
+    ls = S("lan_4p").m("lan_start", 3.6)
+    act("MULTIPLAYER", [("lan_menu", 0.4, 1, "LAN OR ONLINE", None),
+                        ("lan_4p", 1.0, 1, "HOST A ROOM, FRIENDS JOIN", None),
+                        ("lan_4p", ls + 1.2, 2, "UP TO 4 PLAYERS", None),
+                        ("revive", 1.0, 1, "REVIVE YOUR TEAMMATE", None),
+                        ("mode_coop", 2.0, 1, "OR CO-OP ON ONE KEYBOARD", None)])
+    # ---- 9. PROGRESSION (build, 6 bars)
+    ini = S("initials").m("death", 1.5)
+    act("UNLOCK EVERYTHING", [("achievements", 0.3, 1, "45 ACHIEVEMENTS", None),
+                              ("menu_skins", 0.4, 1, "SKINS", None),
+                              ("shop", 0.4, 0.5, "SHOP", None),
+                              ("trail_rainbow", 1.0, 0.5, "TRAILS", None),
+                              ("quests", 0.3, 0.5, "DAILY QUESTS", None),
+                              ("stats", 0.3, 0.5, "STATS", None),
+                              ("initials", ini + 1.6, 0.5, "LEADERBOARDS", None),
+                              ("leaderboard", 0.3, 0.5, "LEADERBOARDS", None),
+                              ("ghost_replay", 1.5, 1, "RACE YOUR BEST RUN'S GHOST", None)])
+    # ---- 10. POLISH (verse, 4 bars)
+    act("THE DETAILS", [("settings_display", 0.4, 0.5, "UP TO 4K", None),
+                        ("colorblind", 0.8, 0.5, "COLOR-BLIND MODE", None),
+                        ("settings_controller", 0.4, 0.5, "CONTROLLER SUPPORT", None),
+                        ("controller_play", 1.0, 0.5, "PLAY ON A GAMEPAD", None),
+                        ("howto", 0.4, 0.5, "BUILT-IN GUIDE", None),
+                        ("update_check", 0.3, 0.5, "AUTO-UPDATES", None),
+                        ("easter_egg", 0.3, 1, None, "...and a secret we're not telling you about")])
+    # ---- 11. RECAP (build, 2 bars, riser)
+    for src, t0, cap in (("ev_gold_rush", 4.0, "9 MODES"), ("map_volcano", 1.0, "6 CHAOS EVENTS"),
+                         ("perk_pick", 4.0, "8 PERKS"), ("lan_4p", ls + 4.0, "4 PLAYERS")):
+        add(Shot(S(src), t0, BEAT * 2, punch=0.08, fx="dim", audio_gain=0.4, caps=[Cap(cap, "stat", color=GOLD)]))
+    # ---- 12. FINALE (drop, 6 bars) - ends on the crash
+    sfx.append((T[0], music.impact(), 0.8))
+    one = [("chaos_max", 2.0), ("lan_4p", ls + 3.0), ("ev_gold_rush", es("ev_gold_rush") + 0.6), ("hz_shower", 2.2),
+           ("mode_battle", 2.0), ("combo", 2.4), ("perk_dash", 0.9), ("ev_hunter", es("ev_hunter") + 2.0),
+           ("trail_rainbow", 2.5), ("portals", max(0.0, S("portals").cue("portal", 1.5) - 0.3)),
+           ("ev_quake", es("ev_quake") + 0.4), ("chaos_battle", 2.6)]
+    half = [("chaos_dark", 2.6), ("pu_freeze", 1.2), ("ev_frenzy", es("ev_frenzy") + 1.0), ("mode_maze", 2.0),
+            ("chaos_max", 3.3), ("revive", 1.8), ("map_volcano", 1.6), ("ev_blackout", es("ev_blackout") + 1.5),
+            ("pu_ghost", 1.4), ("hz_rockfall", 0.6), ("chaos_battle", 4.0), ("mode_timed", 2.0)]
+    for name, t0 in one:
+        add(Shot(S(name), t0, BEAT, punch=0.09, audio_gain=0.7))
+    for name, t0 in half:
+        add(Shot(S(name), t0, BEAT / 2, punch=0.12, audio_gain=0.7))
+    cd = S("chaos_death")
+    dt = cd.m("death", 6.0)
+    add(Shot(cd, dt - BAR * 1.5, BAR * 1.5, zoom=(1.0, 1.12), audio_gain=0.8))
+    # ---- 13. PAYOFF: the music cuts out on the crash
+    add(Shot(cd, dt, 4.6, audio_gain=1.0, caps=[Cap("GG.", "hook", 0.9), Cap("it's not just snake anymore.", "hooksub", 1.6)]))
+    # ---- 14. END CARD
     end_t = T[0]
-    add(Shot(menu, 1.0, BAR * 2 + 0.8, fx="blur", audio_gain=0, flash=0.3,
+    add(Shot(S("menu"), 1.0, BAR * 3 + 0.8, fx="blur", audio_gain=0, flash=0.3,
              overlay=logo_overlay("FREE  ·  Windows  ·  macOS  ·  Linux",
-                                  ("github.com/youssefahmed2017/mega-snake", "9 modes · online co-op · way too many features"))))
+                                  ("github.com/youssefahmed2017/mega-snake",
+                                   "9 modes · 8 maps · chaos events · online co-op"))))
 
-    mus.append((title_t, music.song([("intro", 2), ("build", 8), ("drop", 8)]), 1.0))
+    mus.append((title_t, music.song([("intro", 2), ("verse", 9, False), ("build", 9, True), ("drop", 9, False),
+                                     ("break", 5, True), ("verse", 6, False), ("build", 6, False),
+                                     ("verse", 4, False), ("build", 2, True), ("drop", 6, False)]), 1.0))
     mus.append((end_t, music.song([("end", 3)]), 1.0))
+    print(f"timeline: {T[0]:.1f}s, {len(shots)} shots")
     return Edit(shots, sfx, mus)
 
 

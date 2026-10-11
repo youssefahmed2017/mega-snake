@@ -3,16 +3,18 @@
 Make a hook-first MEGA SNAKE trailer, with music, captions and the game's own sound effects.
 Everything is Python: pygame-ce and numpy (already game dependencies) plus `ffmpeg` on your PATH.
 
-The trailer is cut like this:
+`edit.py clips` (bot footage) cuts a ~2 minute trailer with every feature in it:
 
 | part | what happens |
 |---|---|
-| **Hook** (0-6 s) | Cold open on a run that's about to go wrong. Then a freeze frame and record scratch: *"yep. that's me. you're probably wondering how I got here."* Then a VHS rewind. |
+| **Cold open** | 4 bars of pure chaos on a drop (meteors, the Hunter, Blackout, Gold Rush, quakes at once) under *"POV: you just wanted to play Snake"*. |
+| **Hard stop** | Record scratch, silence, a lonely 3-cell snake: *"it started as just snake." / "then I kept adding stuff."* |
 | **Title slam** | Impact and flash, and the music starts. |
-| **Features** | One bar (about 1.9 s at 128 BPM) per feature, with a caption on the downbeat. |
-| **Drop** | A beat-synced montage: every map, Gold Rush, Frenzy, Ghost, Rockfall, stat cards, then a fast flurry. |
-| **Payoff** | Back to the hook moment. The music stops and the snake crashes: *"...that's how I got here."* |
+| **Acts** | The basics, 9 modes, chaos events + hazards, roguelite perks, 8 maps, multiplayer (a real 4-player LAN match), unlocks, then the details. Each act gets its own music section and a chapter tag. |
+| **Finale** | A drop montage that ends on a crash. The music cuts out: *"GG."* |
 | **End card** | Logo, platforms and the download link. |
+
+`edit.py footage` (your own recording) makes a shorter 50 s cut: a freeze-frame hook on your last death, a rewind, a title slam, your best moments on the beat, and the payoff.
 
 ## 1. From your own OBS recording
 
@@ -37,7 +39,7 @@ Add `--preview` for a fast, low-quality render while you try things out.
 ## 2. From fresh footage recorded by a bot
 
 ```bash
-python tools/trailer/record.py trailer_clips      # ~22 scripted scenes, headless, a few minutes
+python tools/trailer/record.py trailer_clips      # ~75 scripted scenes, headless, ~25 minutes
 python tools/trailer/edit.py clips trailer_clips -o trailer.mp4
 ```
 
@@ -46,6 +48,8 @@ It forces the moments a trailer needs (Hunter, Blackout, Meteor Shower, Gold Rus
 records each scene's sound effects to a wav, and uses a throwaway save folder, so your real
 save is never touched. Use `--only battle,hunter` to re-record just some scenes.
 
-Files: `capture.py` (headless harness + bot), `record.py` (scenes), `music.py` (procedural
+`live.py ROOMCODE` joins a real online room as up to 3 bot guests and films what they see.
+
+Files: `capture.py` (headless harness), `capture_bot.py` (the bot), `record.py` (scenes), `music.py` (procedural
 128 BPM track and stingers, built from the game's own synth voices), `footage.py` (sound
 matching), `edit.py` (the cut, effects, captions and mix).

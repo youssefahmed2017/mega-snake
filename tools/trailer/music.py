@@ -147,14 +147,17 @@ def drone(dur: float) -> np.ndarray:
 
 
 def song(sections) -> np.ndarray:
-    """sections: [(kind, bars)] with kind in intro | build | drop | end.
-    Returns the arranged track; bar boundaries line up with the video cuts."""
-    total = sum(b for _, b in sections) * BAR + 4.0
+    """sections: [(kind, bars) or (kind, bars, riser)] with kind in
+    intro | verse | build | break | drop | end. Bar boundaries line up with the video cuts;
+    riser=True rolls a snare + noise riser over the section's last bar."""
+    total = sum(sec[1] for sec in sections) * BAR + 4.0
     buf = np.zeros((int(total * SR), 2), np.float32)
     K, C, H, HO = kick(), clap(), hat(), hat(True)
     t0 = 0.0
     bar_i = 0
-    for kind, bars in sections:
+    for sec in sections:
+        kind, bars = sec[0], sec[1]
+        rise = sec[2] if len(sec) > 2 else (kind == "build")
         for b in range(bars):
             tb = t0 + b * BAR
             ci = bar_i % 4
@@ -165,15 +168,23 @@ def song(sections) -> np.ndarray:
                 for s in range(8):
                     f = CHORDS[ci][s % 3] * (2 if s % 4 < 2 else 1)
                     _place(buf, _st(_pluck(f, 0.3, 9) * 0.22, 0.6), tb + s * BEAT / 2)
-            elif kind in ("build", "drop"):
+            elif kind == "break":  # half-time: pad, slow arp, kick on 1 and a soft clap on 3
+                _place(buf, pad(CHORDS[ci], BAR + 0.3), tb, 0.75)
+                _place(buf, K, tb, 0.8)
+                _place(buf, C, tb + 2 * BEAT, 0.4)
+                _place(buf, bass_note(ROOTS[ci], BEAT * 2 - 0.01), tb, 0.55)
+                for s in range(8):
+                    f = CHORDS[ci][(s * 2) % 3] * (4 if s % 2 else 2)
+                    _place(buf, _st(_pluck(f, 0.4, 7) * 0.18, 0.8), tb + s * BEAT / 2)
+            elif kind in ("verse", "build", "drop"):
                 drop = kind == "drop"
+                build = kind == "build"
                 _place(buf, pad(CHORDS[ci], BAR + 0.3), tb, 0.55 if drop else 0.45)
                 for q in range(4):
                     _place(buf, K, tb + q * BEAT, 1.0)
                     _place(buf, HO if drop else H, tb + q * BEAT + BEAT / 2, 0.5)
-                    if drop or b >= 2:
-                        if q in (1, 3):
-                            _place(buf, C, tb + q * BEAT, 0.8 if drop else 0.55)
+                    if (drop or build) and q in (1, 3):
+                        _place(buf, C, tb + q * BEAT, 0.8 if drop else 0.55)
                     if drop:
                         _place(buf, H, tb + q * BEAT + BEAT / 4, 0.25)
                         _place(buf, H, tb + q * BEAT + 3 * BEAT / 4, 0.25)
@@ -181,23 +192,28 @@ def song(sections) -> np.ndarray:
                     if e % 2 == 1 or drop:
                         _place(buf, bass_note(ROOTS[ci] * (2 if (drop and e % 4 == 3) else 1), BEAT / 2 - 0.01),
                                 tb + e * BEAT / 2, 0.75)
-                pattern = [0, 1, 2, 1, 0, 2, 1, 2] if not drop else [0, 2, 1, 2, 0, 2, 1, 0, 2, 1, 2, 0, 1, 2, 0, 2]
+                if kind == "verse":
+                    pattern = [0, 2, 1, 2]
+                elif build:
+                    pattern = [0, 1, 2, 1, 0, 2, 1, 2]
+                else:
+                    pattern = [0, 2, 1, 2, 0, 2, 1, 0, 2, 1, 2, 0, 1, 2, 0, 2]
                 step = BAR / len(pattern)
                 for s, p in enumerate(pattern):
                     f = CHORDS[ci][p] * (4 if drop and s % 2 == 0 else 2)
                     _place(buf, _st(_pluck(f, 0.25, 11) * (0.2 if drop else 0.17), 0.7), tb + s * step)
                 if drop and b % 2 == 0:
                     _place(buf, _st(_bell(CHORDS[ci][2] * 4, 0.8, 4) * 0.12, 0.9), tb)
-                if last and kind == "build":
-                    for r in range(8):  # snare roll into the drop
-                        _place(buf, C, tb + 2 * BEAT + r * BEAT / 4, 0.25 + r * 0.08)
-                    _place(buf, riser(BAR), tb, 0.7)
             elif kind == "end":
                 if b == 0:
                     _place(buf, impact(), tb, 0.9)
                     _place(buf, pad(CHORDS[0], BAR * bars + 1.0), tb, 0.7)
                     for i, f in enumerate((440.0, 523.25, 659.25, 880.0)):
                         _place(buf, _st(_bell(f, 1.6, 2.5) * 0.25, 0.8), tb + i * BEAT / 2)
+            if last and rise and kind != "end":
+                for r in range(8):  # snare roll into whatever comes next
+                    _place(buf, C, tb + 2 * BEAT + r * BEAT / 4, 0.25 + r * 0.08)
+                _place(buf, riser(BAR), tb, 0.7)
             bar_i += 1
         t0 += bars * BAR
     return buf
