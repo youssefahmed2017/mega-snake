@@ -8,9 +8,9 @@ Replays two of record.py's scenes with the same seeds and grabs clean frames (th
 in-game announcer and achievement pop-ups hidden), then composes three designs
 around the menu key art (assets/art/menu_bg.png) and the game's letter-spaced
 wordmark:
-  1. key art     - the moonlit river landscape with the wordmark in the sky
-  2. logo + card - wordmark on the left, a framed gameplay screenshot on the right
-  3. cinematic   - full-bleed graded gameplay, letterboxed, wordmark on the lower third
+  1. key art     - the moonlit river landscape, wordmark in the sky, "every feature in 2 minutes"
+  2. logo + card - wordmark + "gameplay showcase" on the left, a framed screenshot on the right
+  3. cinematic   - graded, letterboxed gameplay, "a snake game with way too many features"
 """
 from __future__ import annotations
 
@@ -247,7 +247,7 @@ def make(out: Path) -> None:
     img, _ = cover(key)
     img = grade(img, sat=1.05)
     ly = wordmark(img, W // 2, 205, size=96)
-    spaced(img, "OFFICIAL TRAILER", 26, (225, 235, 245), (W // 2, ly + 44), gap=9, alpha=215)
+    spaced(img, "EVERY FEATURE IN 2 MINUTES", 26, (225, 235, 245), (W // 2, ly + 44), gap=7, alpha=215)
     pygame.image.save(img, str(out / "thumbnail_1_key_art.png"))
 
     # 2. LOGO + GAMEPLAY CARD - wordmark left, a framed screenshot right, on the key art
@@ -278,7 +278,7 @@ def make(out: Path) -> None:
             pygame.draw.line(img, tuple(int(c * a + 10 * (1 - a)) for c in ACCENT), (lx + side * (14 + i), ly),
                              (lx + side * (15 + i), ly), 3)
     pygame.draw.polygon(img, ACCENT, [(lx, ly - 8), (lx + 8, ly), (lx, ly + 8), (lx - 8, ly)])
-    spaced(img, "OFFICIAL TRAILER", 24, (225, 235, 245), (lx, ly + 52), gap=7, alpha=220)
+    spaced(img, "GAMEPLAY SHOWCASE", 24, (225, 235, 245), (lx, ly + 52), gap=7, alpha=220)
     spaced(img, "Windows · macOS · Linux", 20, (160, 190, 210), (lx, ly + 92), gap=2, alpha=200)
     pygame.image.save(img, str(out / "thumbnail_2_logo_and_gameplay.png"))
 
@@ -295,7 +295,7 @@ def make(out: Path) -> None:
     pygame.draw.rect(img, (0, 0, 0), (0, 0, W, bar))
     pygame.draw.rect(img, (0, 0, 0), (0, H - bar, W, bar))
     ly = wordmark(img, W // 2, 420, size=92)
-    spaced(img, "OFFICIAL TRAILER", 24, (225, 235, 245), (W // 2, ly + 42), gap=9, alpha=220)
+    spaced(img, "A SNAKE GAME WITH WAY TOO MANY FEATURES", 24, (225, 235, 245), (W // 2, ly + 42), gap=5, alpha=220)
     pygame.image.save(img, str(out / "thumbnail_3_cinematic.png"))
 
 
