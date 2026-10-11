@@ -1,15 +1,16 @@
 # Copyright (C) 2026 Youssef Ahmed - MEGA SNAKE (see LICENSE)
 # SPDX-License-Identifier: GPL-3.0-only
-"""YouTube thumbnails (1280x720) from clean, re-rendered game frames.
+"""YouTube thumbnails (1280x720) in the game's own visual identity.
 
     python tools/trailer/thumbnail.py [out_dir]
 
-Replays three of record.py's scenes with the same seeds, grabs a frame with the
-in-game announcer text hidden (it fights the thumbnail text), notes where the
-meteors and snake heads are, and composes three designs:
-  1. "THIS IS SNAKE?!"   - full chaos, big two-line text
-  2. SNAKE vs MEGA SNAKE - before/after split
-  3. "I BROKE SNAKE"     - red circle + arrow on a meteor strike
+Replays two of record.py's scenes with the same seeds and grabs clean frames (the
+in-game announcer and achievement pop-ups hidden), then composes three designs
+around the menu key art (assets/art/menu_bg.png) and the game's letter-spaced
+wordmark:
+  1. key art     - the moonlit river landscape with the wordmark in the sky
+  2. logo + card - wordmark on the left, a framed gameplay screenshot on the right
+  3. cinematic   - full-bleed graded gameplay, letterboxed, wordmark on the lower third
 """
 from __future__ import annotations
 
@@ -154,65 +155,148 @@ def ring(surf, center, r, color=RED, width=12):
     pygame.draw.circle(surf, color, center, r, width)
 
 
+ACCENT = (90, 200, 255)
+BODY = str(ROOT / "assets/fonts/VarelaRound-Regular.ttf")
+
+
+def wordmark(surf, cx, y, size=96, gap=None, color=ACCENT, glow=True):
+    """The game's own title treatment (see Game._draw_menu_title): letter-spaced Varela
+    Round in the accent blue, a soft shadow, and a thin fading rule with a diamond."""
+    f = pygame.font.Font(BODY, size)
+    gap = int(size * 0.18) if gap is None else gap
+    letters = [f.render(ch, True, color) for ch in "MEGA SNAKE"]
+    total = sum(l.get_width() for l in letters) + gap * (len(letters) - 1)
+    if glow:
+        # soft halo: the letters' alpha as a mask, blurred, alpha-blended (not added)
+        g = pygame.Surface((total + 240, f.get_height() + 240), pygame.SRCALPHA)
+        x = 120
+        for l in letters:
+            m = pygame.mask.from_surface(l, 40).to_surface(setcolor=(*color, 255), unsetcolor=(*color, 0))
+            g.blit(m, (x, 120))
+            x += l.get_width() + gap
+        for k in (10, 5):
+            small = pygame.transform.smoothscale(g, (max(1, g.get_width() // k), max(1, g.get_height() // k)))
+            g = pygame.transform.smoothscale(small, g.get_size())
+        g.set_alpha(150)
+        surf.blit(g, (cx - total // 2 - 120, y - 120))
+    x = cx - total // 2
+    for ch, l in zip("MEGA SNAKE", letters):
+        s = f.render(ch, True, (4, 6, 10))
+        surf.blit(s, (x + size // 25, y + size // 17))
+        surf.blit(l, (x, y))
+        x += l.get_width() + gap
+    ly = y + f.get_height() + size // 8
+    half = int(total * 0.42)
+    for side in (-1, 1):
+        for i in range(half):
+            a = (1 - i / half) ** 1.5
+            c = tuple(int(cc * a + 10 * (1 - a)) for cc in color)
+            pygame.draw.line(surf, c, (cx + side * (size // 6 + i), ly), (cx + side * (size // 6 + i + 1), ly), max(2, size // 40))
+    d = size // 10
+    pygame.draw.polygon(surf, color, [(cx, ly - d), (cx + d, ly), (cx, ly + d), (cx - d, ly)])
+    return ly
+
+
+def spaced(surf, s, size, color, center, gap=6, font=BODY, alpha=255):
+    f = pygame.font.Font(font, size)
+    letters = [f.render(ch, True, color) for ch in s]
+    total = sum(l.get_width() for l in letters) + gap * (len(letters) - 1)
+    x, y = center[0] - total // 2, center[1] - f.get_height() // 2
+    for l in letters:
+        if alpha < 255:
+            l.set_alpha(alpha)
+        surf.blit(l, (x, y))
+        x += l.get_width() + gap
+
+
+def grade(surf: pygame.Surface, lift=(6, 12, 18), sat=1.1, contrast=1.08) -> pygame.Surface:
+    """Gentle cinematic grade: a touch more contrast, cool shadows."""
+    a = pygame.surfarray.array3d(surf).astype(np.float32)
+    gray = a.mean(axis=2, keepdims=True)
+    a = gray + (a - gray) * sat
+    a = (a - 128) * contrast + 128
+    a = a + np.array(lift, np.float32) * (1 - a / 255)
+    return pygame.surfarray.make_surface(np.clip(a, 0, 255).astype(np.uint8))
+
+
+def soft_shadow(surf, rect, radius=28, spread=40, alpha=170):
+    sh = pygame.Surface((rect.w + spread * 2, rect.h + spread * 2), pygame.SRCALPHA)
+    pygame.draw.rect(sh, (0, 0, 0, alpha), pygame.Rect(spread, spread, rect.w, rect.h), border_radius=radius)
+    small = pygame.transform.smoothscale(sh, (sh.get_width() // 10, sh.get_height() // 10))
+    sh = pygame.transform.smoothscale(small, sh.get_size())
+    surf.blit(sh, (rect.x - spread, rect.y - spread + 14))
+
+
+def rounded(img: pygame.Surface, radius: int) -> pygame.Surface:
+    out = pygame.Surface(img.get_size(), pygame.SRCALPHA)
+    out.blit(img, (0, 0))
+    mask = pygame.Surface(img.get_size(), pygame.SRCALPHA)
+    pygame.draw.rect(mask, (255, 255, 255, 255), mask.get_rect(), border_radius=radius)
+    out.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MIN)
+    return out
+
+
 def make(out: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
     rec = Recorder(Path(tempfile.mkdtemp(prefix="thumbclips-")))
     chaos = grab(rec, "chaos_max", 2.5)
     battle = grab(rec, "chaos_battle", 1.9)
-    calm = grab(rec, "calm_snake", 1.5)
+    key = pygame.image.load(str(ROOT / "assets/art/menu_bg.png")).convert()
 
-    # 1. THIS IS SNAKE?!
+    # 1. KEY ART - the menu landscape (its river is the snake), the wordmark in the sky
+    img, _ = cover(key)
+    img = grade(img, sat=1.05)
+    ly = wordmark(img, W // 2, 205, size=96)
+    spaced(img, "OFFICIAL TRAILER", 26, (225, 235, 245), (W // 2, ly + 44), gap=9, alpha=215)
+    pygame.image.save(img, str(out / "thumbnail_1_key_art.png"))
+
+    # 2. LOGO + GAMEPLAY CARD - wordmark left, a framed screenshot right, on the key art
+    img, _ = cover(key)
+    img.fill((150, 160, 170), special_flags=pygame.BLEND_RGB_MULT)
+    shot = grade(board(battle["img"]))
+    cw = 700
+    card = pygame.transform.smoothscale(shot, (cw, int(cw * shot.get_height() / shot.get_width())))
+    r = card.get_rect(midright=(W - 48, H // 2 + 6))
+    soft_shadow(img, r)
+    img.blit(rounded(card, 18), r)
+    pygame.draw.rect(img, ACCENT, r.inflate(6, 6), 3, border_radius=20)
+    lx = (r.left) // 2 + 8
+    f = pygame.font.Font(BODY, 84)
+    for i, (word, col) in enumerate((("MEGA", ACCENT), ("SNAKE", ACCENT))):
+        letters = [f.render(ch, True, col) for ch in word]
+        gap = 14
+        total = sum(l.get_width() for l in letters) + gap * (len(letters) - 1)
+        x, y = lx - total // 2, 200 + i * 108
+        for l, ch in zip(letters, word):
+            img.blit(f.render(ch, True, (4, 6, 10)), (x + 3, y + 5))
+            img.blit(l, (x, y))
+            x += l.get_width() + gap
+    ly = 200 + 2 * 108 + 6
+    for side in (-1, 1):
+        for i in range(150):
+            a = (1 - i / 150) ** 1.5
+            pygame.draw.line(img, tuple(int(c * a + 10 * (1 - a)) for c in ACCENT), (lx + side * (14 + i), ly),
+                             (lx + side * (15 + i), ly), 3)
+    pygame.draw.polygon(img, ACCENT, [(lx, ly - 8), (lx + 8, ly), (lx, ly + 8), (lx - 8, ly)])
+    spaced(img, "OFFICIAL TRAILER", 24, (225, 235, 245), (lx, ly + 52), gap=7, alpha=220)
+    spaced(img, "Windows · macOS · Linux", 20, (160, 190, 210), (lx, ly + 92), gap=2, alpha=200)
+    pygame.image.save(img, str(out / "thumbnail_2_logo_and_gameplay.png"))
+
+    # 3. CINEMATIC - full-bleed gameplay, graded and letterboxed, wordmark on the lower third
     b = board(chaos["img"])
-    img, to = cover(punch_up(b), zoom=1.0)
-    vignette(img, 200)
-    shade = pygame.Surface((W, H), pygame.SRCALPHA)
-    for x in range(W // 2):
-        pygame.draw.line(shade, (0, 0, 0, int(170 * (1 - x / (W / 2)))), (x, 0), (x, H))
-    img.blit(shade, (0, 0))
-    text(img, "THIS IS", 150, WHITE, (40, 190), angle=3)
-    text(img, "SNAKE?!", 210, YELLOW, (30, 330), stroke=12, angle=3)
-    badge(img)
-    pygame.image.save(img, str(out / "thumbnail_1_this_is_snake.png"))
-
-    # 2. SNAKE vs MEGA SNAKE (before / after)
-    left, _ = cover(gray(board(calm["img"]), 0.6), zoom=1.0)
-    right, _ = cover(punch_up(board(battle["img"])), zoom=1.0)
-    img = right.copy()
-    mask = pygame.Surface((W, H), pygame.SRCALPHA)
-    pygame.draw.polygon(mask, (255, 255, 255, 255), [(0, 0), (W * 0.52, 0), (W * 0.40, H), (0, H)])
-    left_cut = left.copy()
-    left_cut.set_colorkey(None)
-    lc = pygame.Surface((W, H), pygame.SRCALPHA)
-    lc.blit(left_cut, (0, 0))
-    lc.blit(mask, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-    img.blit(lc, (0, 0))
-    pygame.draw.line(img, BLACK, (W * 0.52, 0), (W * 0.40, H), 26)
-    pygame.draw.line(img, YELLOW, (W * 0.52, 0), (W * 0.40, H), 12)
-    vignette(img, 120)
-    text(img, "SNAKE", 120, (200, 200, 200), (W * 0.22, 140), anchor="center")
-    text(img, "MEGA", 150, WHITE, (W * 0.73, 110), anchor="center")
-    text(img, "SNAKE", 150, GREEN, (W * 0.73, 245), anchor="center")
-    arrow(img, (W * 0.22, 520), (W * 0.58, 560), YELLOW)
-    pygame.image.save(img, str(out / "thumbnail_2_snake_vs_mega.png"))
-
-    # 3. I BROKE SNAKE (circle the meteor)
-    target = battle["meteors"][0] if battle["meteors"] else (battle["heads"][0] if battle["heads"] else None)
-    b = board(battle["img"])
-    img, to = cover(punch_up(b, 1.4), focus=target, zoom=1.25)
-    vignette(img, 220)
-    bottom = pygame.Surface((W, 260), pygame.SRCALPHA)
-    for y in range(260):
-        pygame.draw.line(bottom, (0, 0, 0, int(200 * y / 260)), (0, y), (W, y))
-    img.blit(bottom, (0, H - 260))
-    if target:
-        cx, cy = to(target)
-        cx, cy = min(max(cx, 120), W - 120), min(max(cy, 120), H - 300)
-        ring(img, (int(cx), int(cy)), 95)
-        arrow(img, (cx + (330 if cx < W / 2 else -330), cy + 170), (cx + (100 if cx < W / 2 else -100), cy + 55))
-    text(img, "I BROKE SNAKE", 170, WHITE, (W // 2, H - 125), anchor="center", stroke=12)
-    badge(img)
-    pygame.image.save(img, str(out / "thumbnail_3_i_broke_snake.png"))
-    print("meteors:", battle["meteors"], "heads:", battle["heads"])
+    img, _ = cover(grade(b, lift=(4, 8, 16), sat=1.0, contrast=1.05), zoom=1.0)
+    fade = pygame.Surface((W, H), pygame.SRCALPHA)
+    for y in range(H):
+        t = min(1.0, max(0.0, (y - H * 0.25) / (H * 0.45)))
+        pygame.draw.line(fade, (6, 9, 14, int(245 * t ** 1.1)), (0, y), (W, y))
+    img.blit(fade, (0, 0))
+    vignette(img, 150)
+    bar = 46
+    pygame.draw.rect(img, (0, 0, 0), (0, 0, W, bar))
+    pygame.draw.rect(img, (0, 0, 0), (0, H - bar, W, bar))
+    ly = wordmark(img, W // 2, 420, size=92)
+    spaced(img, "OFFICIAL TRAILER", 24, (225, 235, 245), (W // 2, ly + 42), gap=9, alpha=220)
+    pygame.image.save(img, str(out / "thumbnail_3_cinematic.png"))
 
 
 if __name__ == "__main__":
