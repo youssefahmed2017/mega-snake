@@ -166,6 +166,7 @@ class Edit:
     shots: List[Shot]
     sfx: List[Tuple[float, np.ndarray, float]] = field(default_factory=list)
     music: List[Tuple[float, np.ndarray, float]] = field(default_factory=list)
+    notes: List[Tuple[float, float, str]] = field(default_factory=list)  # (start, length, text): subtitle-only
 
 
 # ---------------------------------------------------------------- drawing helpers
@@ -383,6 +384,39 @@ def src_time(shot: Shot, tl: float) -> float:
     return shot.t - tl * shot.speed if shot.reverse else shot.t + tl * shot.speed
 
 
+def write_srt(edit: Edit, path: Path) -> None:
+    """Subtitles for the cut: every on-screen caption (chapter tags aside) plus the
+    subtitle-only notes (sound cues, logo text), on the same frame-quantized clock as render()."""
+    entries: List[Tuple[float, float, str]] = []
+    t = 0.0
+    for shot in edit.shots:
+        start = round(t * FPS) / FPS
+        end = round((t + shot.dur) * FPS) / FPS  # the next cut, exactly
+        caps = [c for c in shot.caps if c.style != "chapter" and c.text]
+        if caps:  # a caption and its sub-line read as one subtitle
+            a = start + min(c.t0 for c in caps)
+            b = min(end, start + max(shot.dur if c.t1 is None else c.t1 for c in caps))
+            entries.append((round(a, 3), round(b, 3), "\n".join(c.text for c in caps)))
+        t += shot.dur
+    entries.sort()
+    merged: List[List] = []
+    for a, b, txt in entries:  # one caption carried across several cuts = one subtitle
+        if merged and merged[-1][2] == txt and a - merged[-1][1] < 0.05:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b, txt])
+    merged += [[a, a + d, txt] for a, d, txt in edit.notes]
+    merged.sort(key=lambda e: e[0])
+
+    def ts(x: float) -> str:
+        ms = int(round(x * 1000))
+        return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d},{ms % 1000:03d}"
+    with open(path, "w", encoding="utf-8") as f:
+        for i, (a, b, txt) in enumerate(merged, 1):
+            f.write(f"{i}\n{ts(a)} --> {ts(b)}\n{txt}\n\n")
+    print(f"wrote {path} ({len(merged)} subtitles)")
+
+
 def render(edit: Edit, out_path: Path, vertical: bool, preview: bool = False) -> None:
     L = Layout(vertical)
     rng = random.Random(1)
@@ -553,6 +587,7 @@ def clips_trailer(d: Path) -> Edit:
             ("hz_rockfall", 0.8, 1), ("ev_quake", es("ev_quake") + 0.2, 1), ("chaos_dark", 3.4, 1),
             ("chaos_max", 3.5, 0.5), ("ev_mirror", es("ev_mirror") + 0.3, 0.5), ("chaos_battle", 4.2, 0.5),
             ("hz_surge", 1.5, 0.5), ("ev_blackout", es("ev_blackout") + 1.0, 0.5), ("chaos_max", 2.5, 0.5)]
+    notes = [(0.0, 2.0, "[intense electronic music]")]
     for i, (name, t0, b) in enumerate(hook):
         add(Shot(S(name), t0, b * BEAT, punch=0.09, shake=14 if i == 0 else 0, flash=0.15 if i == 0 else 0,
                  audio_gain=0.7, caps=[Cap(pov, "big", pop=i == 0)]))
@@ -560,13 +595,16 @@ def clips_trailer(d: Path) -> Edit:
 
     # ---- 2. HARD STOP: it started as just snake
     sfx.append((T[0], music.record_scratch(), 1.0))
+    notes.append((T[0], 0.35, "[record scratch]"))
     add(Shot(S("calm_snake"), 0.6, 3.0, audio_gain=1.0, caps=[Cap("it started as just snake.", "hook", 0.35)]))
     sfx.append((T[0], music.riser(1.5), 0.9))
+    notes.append((T[0] + 1.0, 0.5, "[rising whoosh]"))
     add(Shot(None, 0, 1.5, caps=[Cap("then I kept adding stuff.", "hook", 0.1)]))
 
     # ---- 3. TITLE
     title_t = T[0]
     sfx.append((title_t, music.impact(), 1.0))
+    notes.append((title_t, BAR * 2, "MEGA SNAKE\nthe snake game that got WAY out of hand"))
     add(Shot(S("menu"), 0.4, BAR * 2, flash=0.5, shake=18, zoom=(1.0, 1.05), fx="dim", audio_gain=0.5,
              overlay=logo_overlay("the snake game that got WAY out of hand")))
 
@@ -652,9 +690,11 @@ def clips_trailer(d: Path) -> Edit:
     dt = cd.m("death", 6.0)
     add(Shot(cd, dt - BAR * 1.5, BAR * 1.5, zoom=(1.0, 1.12), audio_gain=0.8))
     # ---- 13. PAYOFF: the music cuts out on the crash
+    notes.append((T[0], 0.9, "[crash]\n[music cuts out]"))
     add(Shot(cd, dt, 4.6, audio_gain=1.0, caps=[Cap("GG.", "hook", 0.9), Cap("it's not just snake anymore.", "hooksub", 1.6)]))
     # ---- 14. END CARD
     end_t = T[0]
+    notes.append((end_t, BAR * 3 + 0.8, "MEGA SNAKE\nFree - Windows, macOS, Linux\ngithub.com/youssefahmed2017/mega-snake"))
     add(Shot(S("menu"), 1.0, BAR * 3 + 0.8, fx="blur", audio_gain=0, flash=0.3,
              overlay=logo_overlay("FREE  ·  Windows  ·  macOS  ·  Linux",
                                   ("github.com/youssefahmed2017/mega-snake",
@@ -665,7 +705,7 @@ def clips_trailer(d: Path) -> Edit:
                                      ("verse", 4, False), ("build", 2, True), ("drop", 6, False)]), 1.0))
     mus.append((end_t, music.song([("end", 3)]), 1.0))
     print(f"timeline: {T[0]:.1f}s, {len(shots)} shots")
-    return Edit(shots, sfx, mus)
+    return Edit(shots, sfx, mus, notes)
 
 
 # ---------------------------------------------------------------- your own footage
@@ -751,6 +791,7 @@ if __name__ == "__main__":
     ap.add_argument("-o", "--output", type=Path, default=Path("trailer.mp4"))
     ap.add_argument("--vertical", action="store_true", help="1080x1920 for Shorts/TikTok/Reels")
     ap.add_argument("--preview", action="store_true", help="fast, low-quality encode")
+    ap.add_argument("--srt", action="store_true", help="only write <output>.srt subtitles, don't render")
     ap.add_argument("--death", type=parse_time, help="(footage) time of the death to use as the hook")
     ap.add_argument("--moments", type=lambda s: [parse_time(x) for x in s.split(",")], default=[],
                     help="(footage) comma-separated highlight times, e.g. 0:42,1:10")
@@ -760,4 +801,6 @@ if __name__ == "__main__":
     else:
         work = a.output.resolve().parent
         ed = footage_trailer(a.input, a.death, a.moments, work)
-    render(ed, a.output, a.vertical, a.preview)
+    write_srt(ed, a.output.with_suffix(".srt"))
+    if not a.srt:
+        render(ed, a.output, a.vertical, a.preview)
