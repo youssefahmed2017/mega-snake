@@ -70,9 +70,11 @@ class Bot:
     """Greedy BFS to the nearest wanted pickup, with a flood-fill check so it
     doesn't box itself in. Good enough to look like a decent player."""
 
-    def __init__(self, want_powerups: bool = True, suicide_after: Optional[float] = None) -> None:
+    def __init__(self, want_powerups: bool = True, suicide_after: Optional[float] = None,
+                 seek: Optional[Callable] = None) -> None:
         self.want_powerups = want_powerups
         self.suicide_after = suicide_after  # seconds; then it steers into the nearest wall/body
+        self.seek = seek  # seek(g, snake) -> cells to go for first (a portal, a bomb on purpose...)
         self._last: Dict[int, tuple] = {}
 
     def _wrap(self, g) -> bool:
@@ -118,12 +120,13 @@ class Bot:
                     q.append(n)
         return len(seen)
 
-    def decide(self, g, snake, t: float) -> None:
+    def decide(self, g, snake, t: float, apply: Optional[Callable] = None) -> None:
         key = id(snake)
-        sig = (snake.head, g.tick_count if hasattr(g, "tick_count") else 0, len(g.foods))
+        sig = (snake.head, len(g.foods), len(g.powerups), len(g.downerups))
         if self._last.get(key) == sig:
             return
         self._last[key] = sig
+        apply = apply or snake.set_direction
         wrap = self._wrap(g)
         cur = snake.direction
         options = [d for d in DIRS if not (d[0] == -cur[0] and d[1] == -cur[1])]
@@ -132,15 +135,19 @@ class Bot:
             # Head for the closest wall and keep going - a "classic" death.
             hx, hy = snake.head
             dists = {(1, 0): GRID_W - hx, (-1, 0): hx + 1, (0, 1): GRID_H - hy, (0, -1): hy + 1}
-            snake.set_direction(min((d for d in options), key=lambda d: dists[d]))
+            apply(min((d for d in options), key=lambda d: dists[d]))
             return
 
         blocked = self._blocked(g, snake)
+        wanted = set(self.seek(g, snake)) if self.seek else set()
+        blocked -= wanted
         need = len(snake.body) + 4
         targets = {(f.x, f.y): (3 if f.kind == main.FOOD_GOLDEN else 1) for f in g.foods}
         if self.want_powerups:
             for p in g.powerups:
                 targets[(p.x, p.y)] = 2
+        if wanted:
+            targets = {c: 50 for c in wanted}
 
         # BFS from each option so we know the first move of every shortest path.
         best = None
@@ -167,7 +174,7 @@ class Bot:
             if best is None or score < best[0]:
                 best = (score, d)
         if best is not None:
-            snake.set_direction(best[1])
+            apply(best[1])
 
 
 # ---------------------------------------------------------------- recorder
@@ -182,7 +189,8 @@ class Recorder:
         self.game.ghost_enabled = False
 
     def scene(self, name: str, seconds: float, setup: Callable, each: Optional[Callable] = None,
-              bot: Optional[Bot] = None, tail_after_death: float = 2.5, seed: int = 1, preroll: float = 0.0) -> dict:
+              bot: Optional[Bot] = None, tail_after_death: float = 2.5, seed: int = 1, preroll: float = 0.0,
+              steer: Optional[Callable] = None, initials: str = "YOU") -> dict:
         """Record one shot. setup(g) puts the game where we want it; each(g, t, rec)
         runs before every frame for scripted beats (forcing an event, etc.)."""
         g = self.game
@@ -213,12 +221,23 @@ class Recorder:
         n = int(seconds * FPS)
         death_at = None
         frame = 0
+        typed = 0
+        initials_since = None
         while frame < n or (death_at is not None and frame < death_at + tail_after_death * FPS):
             t = frame / FPS
             if g.state == main.STATE_PLAYING and g.death_pause_timer <= 0:
                 for i, p in enumerate(g.players):
                     if p is not None and g.players_alive[i]:
-                        bot.decide(g, p, t)
+                        bot.decide(g, p, t, steer(g, i) if steer else None)
+            if g.state == main.STATE_ENTER_INITIALS:  # type a name like a player would
+                initials_since = t if initials_since is None else initials_since
+                k = int((t - initials_since - 0.7) / 0.3)
+                if 0 <= k and typed < len(initials) and k >= typed:
+                    g.handle_initials_key(pygame.K_a + ord(initials[typed].lower()) - ord("a"))
+                    typed += 1
+                elif typed == len(initials) and t - initials_since > 0.7 + 0.3 * typed + 0.5:
+                    g.handle_initials_key(pygame.K_RETURN)
+                    typed += 1
             if g.state == main.STATE_PERK_PICK and "perk" not in self.markers:
                 self.markers["perk"] = t
             if g.state == main.STATE_PERK_PICK and t - self.markers["perk"] > 1.6:
