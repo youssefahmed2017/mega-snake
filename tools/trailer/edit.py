@@ -240,6 +240,10 @@ def draw_caps(out: pygame.Surface, shot: Shot, tl: float, L: Layout) -> None:
         f = font(path, size)
         lines = wrap(c.text, f, int(L.W * 0.88))
         surfs = [outlined(ln, path, size, c.color, stroke, shadow=6) for ln in lines]
+        widest = max(x.get_width() for x in surfs)
+        if widest > L.W * 0.94:  # a single word too wide for the frame (vertical): shrink to fit
+            k = L.W * 0.94 / widest
+            surfs = [pygame.transform.smoothscale_by(x, k) for x in surfs]
         # pop in: overshoot then settle; fade the last 0.12 s
         pop = 1.0 + 0.35 * math.exp(-age * 18) * math.cos(age * 30) if c.style not in ("hook", "hooksub", "sub", "small") else 1.0
         alpha = min(1.0, age / 0.08) * min(1.0, (t1 - tl) / 0.1)
