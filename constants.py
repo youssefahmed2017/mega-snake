@@ -501,12 +501,12 @@ SECRET_SHOP_ITEMS = [
     ("A Second Snake", "Priceless", "It's just staring at you."),
 ]
 
-GAME_VERSION = "3.3.0"
+GAME_VERSION = "3.4.0"
 
 # Oldest version that may play multiplayer with this one. Different versions inside the
 # range play together; anything older is turned away. Raise it only when the network
 # protocol changes in a way old builds can't follow, and mirror it in server/src/index.js.
-MIN_MULTIPLAYER_VERSION = "1.9.2"
+MIN_MULTIPLAYER_VERSION = "3.4.0"
 
 # Links shown (and clickable) on the main menu.
 REPO_URL = "https://github.com/youssefahmed2017/mega-snake"
@@ -520,6 +520,21 @@ ONLINE_SERVER_URL = "wss://megasnake-online.megasnake-online.workers.dev"
 GHOST_MAX_TICKS = 5000
 
 CHANGELOG = [
+    ("3.4.0", [
+        "Multiplayer (LAN and online) now has every mode, including the Arcade games:",
+        "  Classic, Walls, Maze, Battle, Timed, Hardcore, Daily, Roguelite, Food Rush,",
+        "  Hunter Gauntlet, Maze Escape and Reversed",
+        "Reversed with friends: everyone is an apple, a snake that eats one grows,",
+        "  and a living friend can step on a grave to revive them",
+        "New Lucky Block: a very rare pickup with a random effect (more common in",
+        "  Daily and Roguelite) - Teleport lets you pick where to jump, with a big animation",
+        "Reversed: the apple only moves while you hold keys (two keys = diagonal)",
+        "  and wraps around the edges; hunters die when they touch each other",
+        "The mushroom is now a downer-up; the speed apple is rarer and gentler",
+        "Removed near-miss (and its slow-mo, sound and setting)",
+        "Quick key combos are no longer dropped",
+        "Needs 3.4.0 on both sides for multiplayer",
+    ]),
     ("3.3.0", [
         "New Arcade modes: Food Rush, Hunter Gauntlet, Maze Escape, and Reversed",
         "Personal-best ghost replays in solo modes",
