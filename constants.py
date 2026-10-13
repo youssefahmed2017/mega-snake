@@ -87,13 +87,11 @@ SKIN_SHOP_COST = {
 FOOD_NORMAL = "normal"
 FOOD_GOLDEN = "golden"
 FOOD_SPEED = "speed"
-FOOD_SHRINK = "shrink"
 
-FOOD_WEIGHTS = {  # golden ~3% of food, the special kinds ~6% each - they should feel like finds
+FOOD_WEIGHTS = {  # golden ~3% of food, speed ~1.5% - they should feel like finds
     FOOD_NORMAL: 85,
     FOOD_GOLDEN: 3,
-    FOOD_SPEED: 6,
-    FOOD_SHRINK: 6,
+    FOOD_SPEED: 1.5,
 }
 
 # Pickup spawn rates, in expected spawns per second while under the on-field cap. Rolled
@@ -105,7 +103,6 @@ FOOD_COLORS = {
     FOOD_NORMAL: (255, 90, 90),
     FOOD_GOLDEN: GOLD,
     FOOD_SPEED: (90, 200, 255),
-    FOOD_SHRINK: PURPLE,
 }
 
 # "Downerups": hazard pickups that spawn and get collected like power-ups
@@ -114,18 +111,38 @@ FOOD_COLORS = {
 # dodge, not as 1-in-6 nutrition that occasionally kills you.
 DOWNERUP_BOMB = "bomb"
 DOWNERUP_CURSE = "curse"
+DOWNERUP_SHRINK = "shrink"  # the mushroom
 
-DOWNERUP_TYPES = [DOWNERUP_BOMB, DOWNERUP_CURSE]
+DOWNERUP_TYPES = [DOWNERUP_BOMB, DOWNERUP_CURSE, DOWNERUP_SHRINK]
 
 DOWNERUP_COLORS = {
     DOWNERUP_BOMB: (30, 30, 30),
     DOWNERUP_CURSE: CURSE_COLOR,
+    DOWNERUP_SHRINK: PURPLE,
 }
 
 # Downerups spawn independently of (and rarer than) power-ups, and only one
 # is ever on the field at a time - see maybe_spawn_downerup() in food.py.
-DOWNERUP_SPAWN_RATE = 1 / 40
+DOWNERUP_SPAWN_RATE = 1 / 30
 DOWNERUP_TTL = 10.0
+
+# Lucky Block: a very rare pickup (solo runs only, in modes with power-ups) that pays out a random
+# effect, good or bad. Daily and Roguelite roll it LUCKY_MODE_MULT times as often. See Game._open_lucky_block.
+LUCKY_SPAWN_RATE = 1 / 420
+LUCKY_TTL = 14.0
+LUCKY_COLOR = (255, 200, 87)
+COLORBLIND_LUCKY_COLOR = (240, 228, 66)
+LUCKY_MODE_MULT = 3
+LUCKY_COINS = (30, 80)
+INVINCIBLE_DURATION = 10.0
+WARP_DURATION = 7.0   # how long the Teleport effect waits for you to press Space
+WARP_FX_SECONDS = 1.15  # length of the teleport animation (the snake actually moves at WARP_FX_LAND of it)
+WARP_FX_LAND = 0.45
+# (effect, weight): the two bad ones are as likely as the common good ones, the two specials rarer.
+LUCKY_EFFECTS = [
+    ("mushroom", 2), ("curse", 2), ("golden", 3), ("apple", 3), ("coins", 3),
+    ("powerup", 3), ("invincible", 1.5), ("teleport", 2.5),
+]
 
 POWERUP_GHOST = "ghost"
 POWERUP_MAGNET = "magnet"
@@ -153,12 +170,12 @@ COLORBLIND_FOOD_COLORS = {
     FOOD_NORMAL: (213, 94, 0),
     FOOD_GOLDEN: (240, 228, 66),
     FOOD_SPEED: (86, 180, 233),
-    FOOD_SHRINK: (204, 121, 167),
 }
 
 COLORBLIND_DOWNERUP_COLORS = {
     DOWNERUP_BOMB: (30, 30, 30),
     DOWNERUP_CURSE: (0, 114, 178),
+    DOWNERUP_SHRINK: (204, 121, 167),
 }
 
 COLORBLIND_POWERUP_COLORS = {
@@ -201,9 +218,9 @@ MODE_CONFIG = {
                      hazards=True),
     "Coop": dict(wrap=False, powerups=True, obstacles=False, rivals=0, timer=None, coop=True, seeded=False, speed_mult=1.0),
     "Daily": dict(wrap=False, powerups=True, obstacles=True, rivals=0, timer=None, coop=False, seeded=True, speed_mult=1.0,
-                  events=True),
+                  events=True, lucky_mult=LUCKY_MODE_MULT),
     "Roguelite": dict(wrap=False, powerups=True, obstacles=False, rivals=0, timer=None, coop=False, seeded=False,
-                      speed_mult=1.0, events=True, perks=True),
+                      speed_mult=1.0, events=True, perks=True, lucky_mult=LUCKY_MODE_MULT),
 
     # --- Arcade (unlocked in the Shop, picked from the Arcade list - never appear in the
     # normal Mode cycle, see MODES above and Game.mode_name()). `arcade=True` tells
@@ -221,7 +238,7 @@ MODE_CONFIG = {
                         speed_mult=1.0, arcade=True, food=False, manual_move=True),
     # Reversed: you ARE the apple, snakes hunt you - see Game._setup_arcade/_reversed_spawn_point
     # and the per-frame level-up check in update_playing. Concept credit: REVERSED_CREDIT below.
-    "Reversed": dict(wrap=False, powerups=False, obstacles=False, rivals=0, timer=None, coop=False,
+    "Reversed": dict(wrap=True, powerups=False, obstacles=False, rivals=0, timer=None, coop=False,
                      seeded=False, speed_mult=1.0, arcade=True, food=False),
 }
 
@@ -247,19 +264,40 @@ MODE_DESC = {
     "Food Rush": "Eat as much as you can in 18 seconds.",
     "Hunter Gauntlet": "Survive the hunter snake as long as you can.",
     "Maze Escape": "Find the exit before the clock runs out.",
-    "Reversed": "You're the apple. Outrun the snakes - they multiply every level.",
+    "Reversed": "You're the apple. Hold keys to move (two = diagonal). Outrun the snakes - they multiply every level.",
 }
 
 # LAN match setup: the host picks a ruleset (wrap/obstacle behavior) and a map
 # (a fixed obstacle layout, independent of the ruleset's own procedural growth)
 # before opening the socket. Both apply on top of the shared Coop rules (2
 # snakes, shared score) - they don't change who can join or how.
-LAN_RULESETS = {
-    "Classic": {"wrap": True, "obstacles": False, "desc": "Wrap around edges."},
-    "Walls": {"wrap": False, "obstacles": False, "desc": "Edges kill you."},
-    "Maze": {"wrap": False, "obstacles": True, "desc": "Obstacles grow over time."},
+# Every solo mode (and every Arcade game) is a ruleset: the shared Coop rules (shared score, teammates, revives) on
+# top of that mode's own config. `arcade_name` is set for the Arcade ones, which the match then runs as.
+LAN_RULESET_DESC = {
+    "Classic": "Wrap around edges. Pure snake, shared score.",
+    "Walls": "Edges kill you.",
+    "Maze": "Walls + obstacles that grow over time.",
+    "Battle": "Walls + two AI rivals fight you for the food.",
+    "Timed": "60 second team score attack. Wraps around.",
+    "Hardcore": "No power-ups, faster, meteors and tremors strike anyone.",
+    "Daily": "Today's seeded layout and chaos events, together.",
+    "Roguelite": "Walls + chaos events (the perk picks are solo-only).",
+    "Food Rush": "18 seconds: the team eats as much as it can.",
+    "Hunter Gauntlet": "A hunter snake chases the nearest of you. Survive.",
+    "Maze Escape": "Every step is a key press. First one out wins it for the team.",
+    "Reversed": "Everyone is an apple. A snake that eats one grows; touch a fallen friend to revive them.",
 }
-LAN_RULESET_NAMES = list(LAN_RULESETS.keys())
+LAN_RULESET_NAMES = ["Classic", "Walls", "Maze", "Battle", "Timed", "Hardcore", "Daily", "Roguelite",
+                     "Food Rush", "Hunter Gauntlet", "Maze Escape", "Reversed"]
+LAN_RULESETS = {
+    name: dict(MODE_CONFIG[name], coop=True, arcade_name=(name if name in ARCADE_MODES else None),
+               desc=LAN_RULESET_DESC[name])
+    for name in LAN_RULESET_NAMES
+}
+
+# Reversed with friends: a fallen apple leaves a grave; a living friend moving onto it within this long revives them.
+REVERSED_GRAVE_SECONDS = 15.0
+REVERSED_EAT_GROWTH = 3  # segments a hunter gains for every apple it eats
 
 
 def _ring(margin: int) -> set:

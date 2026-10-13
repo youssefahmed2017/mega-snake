@@ -136,7 +136,6 @@ class SoundBank:
         self.teleport = _make(_mix((_glide(220, 1500, 0.28, 2.0, 0.2), 0.7),
                                       (_sequence([np.zeros(1), _bell(1975.5, 0.35, 9)], 0.2), 0.4)), 0.5, 0.3)
         self.unlock = _make(_sequence([_bell(f, 1.0, 3.5) for f in (392.0, 493.9, 587.3, 784.0, 987.8)], 0.07), 0.6, 0.45)
-        self.near_miss = _make(_noise_whoosh(0.16, 1200, 5200) * 0.9, 0.4, 0.15)
         tp = _t(0.07)
         self.chat = _make(_fade(np.sin(2 * np.pi * 740 * tp) * np.exp(-55 * tp), 0.001, 0.02), 0.35, 0.1)
         self.muted = False

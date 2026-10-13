@@ -238,6 +238,12 @@ def prepare_wall() -> None:
     save("wall_tile.png", rgba[ys.min():ys.max() + 1, xs.min():xs.max() + 1], max_dim=192)
 
 
+def prepare_lucky() -> None:
+    rgba = key_magenta(load("lucky_block.png"))
+    ys, xs = np.where(rgba[..., 3] > 40)
+    save("lucky_block.png", rgba[ys.min():ys.max() + 1, xs.min():xs.max() + 1], max_dim=192)
+
+
 def prepare_title() -> None:
     rgba = key_magenta(load("title.png"))
     ys, xs = np.where(rgba[..., 3] > 40)
@@ -293,7 +299,7 @@ def prepare_board() -> None:
 def main() -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     print("snake");   sheet("snake_sheet.png", ["snake_head", "snake_body", "snake_curve", "snake_tail"], merge=14)
-    print("food");    sheet("food_sheet.png", ["food_normal", "food_golden", "food_speed", "food_shrink"], merge=14, max_dim=192)
+    print("food");    sheet("food_sheet.png", ["food_normal", "food_golden", "food_speed", "hz_shrink"], merge=14, max_dim=192)
     print("powerups"); sheet("powerup_sheet.png", ["pu_ghost", "pu_magnet", "pu_shield", "pu_slowmo",
                                                   "pu_mult", "pu_freeze", "pu_teleport", "pu_revive"],
                           merge=1, rows=2, max_dim=192)
@@ -308,6 +314,7 @@ def main() -> None:
     step("tongue", prepare_tongue, _tongue_source())
     step("ghost", prepare_ghost, "ghost_sheet.png")
     step("wall", prepare_wall, "wall_tile.png")
+    step("lucky", prepare_lucky, "lucky_block.png")
     step("title", prepare_title, "title.png")
     step("sidebar", prepare_sidebar, "sidebar_bg.png")
     print("decor")

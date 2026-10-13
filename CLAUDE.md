@@ -44,7 +44,7 @@ keep their `OFL-*.txt` files.
 ## Architecture
 
 ### Core game loop — `main.py`
-Everything client-side funnels through the single `Game` class in `main.py` (~4200 lines): state machine
+Everything client-side funnels through the single `Game` class in `main.py` (~5800 lines): state machine
 (menu/playing/paused/game-over/shop/settings), rendering, input, and all three multiplayer transports. Other
 modules (`snake.py`, `food.py`, `enemy.py`, `particles.py`, `achievements.py`, `quests.py`, `persistence.py`,
 `audio.py`, `celebrate.py`, `constants.py`, `tls.py`, `updater.py`) are plain support modules imported by
@@ -127,6 +127,19 @@ down, speed surge, rockfall) via `_on_hazard`/`_update_hazards`. A clutch save o
 `_start_countdown()`, which freezes `update_playing` for a 3-2-1 (solo only; a LAN host can't show it to guests).
 Pickup rarity (power-ups, downer-ups, portals) is per-second (`*_SPAWN_RATE` in `constants.py`, rolled with `dt`), not per frame.
 
+**Lucky Block.** A very rare solo-only pickup (`LUCKY_*` in `constants.py`, `LuckyBlock`/`maybe_spawn_lucky` in `food.py`,
+rolled ×`lucky_mult` in Daily/Roguelite). `Game._open_lucky_block` picks an effect from the weighted `LUCKY_EFFECTS`; invincibility is
+`invincible_timer` (checked through `Game._phased()` alongside Ghost). Teleport gives a `warp_timer` window: Space opens a target picker
+(`warp_selecting`, run frozen, arrows move the cursor, Space/Enter go, Esc cancels), then `warp_fx` plays the animation and `_warp_land` moves the snake.
+Art is `assets/art/lucky_block.png` (from `assets/source/lucky_block.png` via `tools/prepare_art.py`); the vector `?` box is the fallback.
+Mushroom, Bomb and Curse are all downerups (`DOWNERUP_*`), not food.
+
+**Dev build / cheat console.** `build_info.DEV` (False in every release; `python tools/build_dev.py` flips it just for a PyInstaller
+run, and `MEGASNAKE_DEV=1 python main.py` does it from source) creates `Game.dev = DevConsole` (`devconsole.py`, opened with `` ` `` or F10).
+It pokes the same `Game` fields the game uses; commands are registered with `@cmd`. Hooks in `main.py`: `handle_event`, `_frame`
+(`adjust_dt`/`draw`), `move_interval` (`speed_mult`), `_phased` (god). Dev builds save to `~/.megasnake-dev` and never auto-update.
+Gameplay commands refuse in LAN/online games. Run any headless test with `MEGASNAKE_DEV=1` or it will write the real `~/.megasnake` save.
+
 ### Multiplayer — authoritative host, dumb clients
 In both LAN and Online modes, **the host's `Game` instance is the only authoritative simulation**; every
 other connected player is a pure renderer that sends inputs upstream and applies snapshots sent back down.
@@ -147,6 +160,13 @@ authoritative rather than letting guests simulate independently.
   — it documents the full message contract.
 - Max player count is `MAX_PLAYERS` in `constants.py` (4); guest slot labels/colors are in
   `PLAYER_LABELS`/`PLAYER_COLORS`, keyed in the same order as the relay's `GUEST_SLOTS`.
+
+**Multiplayer rulesets.** Every solo mode and every Arcade game is a LAN/online ruleset (`LAN_RULESETS`, built from `MODE_CONFIG` plus
+`coop=True`; Arcade ones carry `arcade_name`, so the match runs with `Game.arcade_mode` set and the host's "start" message names the ruleset).
+The host sim runs everything (rivals, hazards, events) and streams the extras as optional snapshot keys (`rivals`, `meteors`, `ev`, `hz`, `goal`,
+`graves`, `lvl`). Reversed with friends: each player is an apple that moves only while held (guests send `hold` messages, the host keeps
+`net_hold`/`net_taps`), hunters chase the nearest apple and grow when they eat one, and a living apple stepping on a `graves` cell revives that
+friend. Maze Escape steps per key press, so `_tick(only=tag)` moves just that player. Guests never roll chaos events or perks (Roguelite's perks stay solo-only).
 
 **Smooth multiplayer.** The host sends one snapshot per move tick (`update_playing` -> `_send_snapshot`), so each is
 exactly one grid step after the last; `tk` (tick number) and `ti` (tick seconds) are optional extra fields, and every
@@ -183,7 +203,7 @@ non-expiring download URLs — this is deliberate: the updater needs permanent U
 expire and require auth, so they can't serve that role. When cutting a release, tag `vX.Y.Z` after bumping
 `GAME_VERSION` in `constants.py`.
 
-## Related: `snake-site/`
+## `snake-site/`
 
-A separate, ungitted static site (Vercel-deployed, `index.html` + `.vercel/`) one directory up from this repo
-— the project's landing page. Not part of this repository.
+The project's static landing page (`index.html`, `sitemap.xml`, a Google verification file), tracked in this repo and
+deployed separately (Vercel). Not part of the game build.

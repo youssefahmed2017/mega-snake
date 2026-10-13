@@ -8,10 +8,11 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from build_info import DEV
 from constants import SAVE_DIR_NAME
 from settings_defs import SETTING_DEFAULTS
 
-SAVE_DIR = Path.home() / SAVE_DIR_NAME
+SAVE_DIR = Path.home() / (SAVE_DIR_NAME + "-dev" if DEV else SAVE_DIR_NAME)  # dev builds never touch the real save
 SAVE_FILE = SAVE_DIR / "save.json"
 # Ghost trails live in their own compact file: thousands of [x, y, score]
 # entries per mode would make the indented, human-readable save.json huge.

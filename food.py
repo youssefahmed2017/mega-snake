@@ -12,6 +12,7 @@ from constants import (
     POWERUP_GHOST, POWERUP_MAGNET, POWERUP_SHIELD, POWERUP_SLOWMO, POWERUP_MULT,
     POWERUP_FREEZE, POWERUP_TELEPORT,
     DOWNERUP_TYPES, DOWNERUP_SPAWN_RATE, DOWNERUP_TTL, POWERUP_SPAWN_RATE, PORTAL_SPAWN_RATE,
+    LUCKY_SPAWN_RATE, LUCKY_TTL,
 )
 
 POWERUP_TYPES = [
@@ -44,6 +45,13 @@ class Downerup:
     y: int
     kind: str
     ttl: float = DOWNERUP_TTL  # despawns if not collected
+
+
+@dataclass
+class LuckyBlock:
+    x: int
+    y: int
+    ttl: float = LUCKY_TTL  # despawns if not opened
 
 
 def random_free_cell(occupied: Set[Tuple[int, int]], rng: random.Random = random) -> Tuple[int, int]:
@@ -89,6 +97,14 @@ def maybe_spawn_downerup(occupied: Set[Tuple[int, int]], existing: List[Downerup
     kind = random.choice(DOWNERUP_TYPES)
     x, y = random_free_cell(occupied)
     return Downerup(x, y, kind)
+
+
+def maybe_spawn_lucky(occupied: Set[Tuple[int, int]], existing: List[LuckyBlock], dt: float,
+                      mult: float = 1.0) -> Optional[LuckyBlock]:
+    if existing or random.random() > LUCKY_SPAWN_RATE * mult * dt:
+        return None
+    x, y = random_free_cell(occupied)
+    return LuckyBlock(x, y)
 
 
 def maybe_spawn_portal_pair(occupied: Set[Tuple[int, int]],

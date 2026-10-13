@@ -39,8 +39,6 @@ SETTING_DEFS: List[SettingDef] = [
                hint="Solo runs pause when you switch to another window."),
     SettingDef("callouts", "On-Screen Callouts", "Gameplay", "toggle", True,
                hint="The COMBO x5! / NEW PERSONAL BEST banners."),
-    SettingDef("near_miss_slowmo", "Near-Miss Slow-Mo", "Gameplay", "toggle", True,
-               hint="Brief slowdown when you scrape past a wall or tail."),
     SettingDef("show_ghost", "Ghost Replay", "Gameplay", "toggle", True,
                hint="Show your best run for this mode as a faint ghost."),
     # Display

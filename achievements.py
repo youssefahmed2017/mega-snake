@@ -40,8 +40,6 @@ ACHIEVEMENTS: List[Achievement] = [
     Achievement("mustachioed", "Fine Moustache", "Give your snake some class", lambda s: False, hidden=True),
 
     # --- skill & per-run feats ---
-    Achievement("close_call", "Close Call", "Scrape past a wall or tail and live", lambda s: s.get("near_misses", 0) >= 1),
-    Achievement("edge_lord", "Edge Lord", "Get 10 near misses in one run", lambda s: s.get("near_misses", 0) >= 10, "near_misses", 10),
     Achievement("golden_trio", "Golden Trio", "Eat 3 golden apples in one run", lambda s: s["golden_eaten"] >= 3, "golden_eaten", 3),
     Achievement("fully_charged", "Fully Charged", "Pick up 5 power-ups in one run", lambda s: s["powerups_collected"] >= 5, "powerups_collected", 5),
     Achievement("portal_hopper", "Portal Hopper", "Travel through 3 portals in one run", lambda s: s["portals_used"] >= 3, "portals_used", 3),
@@ -82,6 +80,7 @@ ACHIEVEMENTS: List[Achievement] = [
     Achievement("fashionista", "Fashionista", "Buy a trail in the shop", lambda s: False),
     Achievement("collector", "Collector", "Own every shop trail", lambda s: False),
     Achievement("record_breaker", "Record Breaker", "Beat your personal best in any mode", lambda s: False),
+    Achievement("lucky_find", "Feeling Lucky", "Open a Lucky Block", lambda s: False),
     Achievement("arcade_found", "Arcade Found", "Unlock the arcade", lambda s: False),
     Achievement("skin_shopper", "New Look", "Buy a skin in the shop", lambda s: False),
     Achievement("skin_collector", "Wardrobe", "Unlock or buy every skin", lambda s: False),
@@ -103,7 +102,7 @@ ACHIEVEMENTS_BY_ID: Dict[str, Achievement] = {a.id: a for a in ACHIEVEMENTS}
 
 class AchievementTracker:
     def __init__(self, unlocked_ids: List[str]) -> None:
-        self.unlocked = set(unlocked_ids)
+        self.unlocked = {i for i in unlocked_ids if i in ACHIEVEMENTS_BY_ID}  # drop ids of removed achievements
         self.pending_popups: List[Achievement] = []
 
     def check(self, stats: dict) -> List[Achievement]:

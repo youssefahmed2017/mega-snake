@@ -23,6 +23,7 @@ import random
 import sys
 import tempfile
 import time
+import types
 from pathlib import Path
 from collections import deque
 from typing import Dict, List, Optional, Tuple
@@ -33,19 +34,20 @@ import pygame
 import colorsys
 
 from constants import (
+    LUCKY_COLOR, COLORBLIND_LUCKY_COLOR, LUCKY_COINS, LUCKY_EFFECTS, INVINCIBLE_DURATION, WARP_DURATION, WARP_FX_SECONDS, WARP_FX_LAND,
     CELL_SIZE, GRID_W, GRID_H, SIDEBAR_W, SCREEN_W, SCREEN_H, BOARD_Y, FPS, BASE_MOVE_INTERVAL,
     BG, GRID_LINE, SIDEBAR_BG, TEXT, TEXT_DIM, ACCENT, DANGER, GOLD, GREEN, PURPLE,
     SNAKE_SKINS, SKIN_UNLOCK_REQUIREMENT, SKIN_SHOP_COST, P2_COLOR, PLAYER_COLORS, PLAYER_LABELS, MAX_PLAYERS,
     TRAIL_EFFECTS, TRAIL_NAMES,
-    FOOD_NORMAL, FOOD_GOLDEN, FOOD_SPEED, FOOD_SHRINK, FOOD_COLORS,
-    DOWNERUP_BOMB, DOWNERUP_CURSE, DOWNERUP_COLORS, COLORBLIND_DOWNERUP_COLORS,
+    FOOD_NORMAL, FOOD_GOLDEN, FOOD_SPEED, FOOD_COLORS,
+    DOWNERUP_BOMB, DOWNERUP_CURSE, DOWNERUP_SHRINK, DOWNERUP_COLORS, COLORBLIND_DOWNERUP_COLORS,
     POWERUP_GHOST, POWERUP_MAGNET, POWERUP_SHIELD, POWERUP_SLOWMO, POWERUP_MULT,
     POWERUP_FREEZE, POWERUP_TELEPORT, POWERUP_REVIVE, POWERUP_COLORS, POWERUP_DURATIONS, CURSE_DURATION,
     PORTAL_A, PORTAL_B, MODES, MODE_CONFIG, MODE_DESC, ARCADE_COST, ARCADE_MODES, DIFFICULTIES, DIFFICULTY_SPEED_MULT,
     REVERSED_LEVEL_SECONDS, REVERSED_MAX_LEVEL, REVERSED_CREDIT,
     RESUME_COUNTDOWN_STEPS, RESUME_COUNTDOWN_STEP_SECONDS, METEOR_WARN_SECONDS, REPO_URL, SUPPORT_URL,
     GAME_VERSION, MIN_MULTIPLAYER_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
-    LAN_RULESETS, LAN_RULESET_NAMES, MAPS, MAP_NAMES, MAP_THEMES, DEFAULT_THEME,
+    REVERSED_GRAVE_SECONDS, REVERSED_EAT_GROWTH, LAN_RULESETS, LAN_RULESET_NAMES, MAPS, MAP_NAMES, MAP_THEMES, DEFAULT_THEME,
     EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS, ONLINE_SERVER_URL, MUSTACHE_CODE,
 )
 from snake import PlayerSnake
@@ -54,7 +56,7 @@ from events import (EventDirector, EVENTS, EVENT_FRENZY, EVENT_GOLD_RUSH, EVENT_
                     EVENT_HUNTER, EVENT_QUAKE, PERKS, PERK_EVERY_FOODS, roll_perk_choices, featured_event,
                     HazardRoller, HAZARDS, HAZARD_METEOR, HAZARD_SHOWER, HAZARD_TREMOR, HAZARD_SURGE, HAZARD_ROCKFALL)
 from food import (
-    Food, PowerUp, Downerup, spawn_food, maybe_spawn_powerup, maybe_spawn_downerup,
+    Food, PowerUp, Downerup, LuckyBlock, spawn_food, maybe_spawn_powerup, maybe_spawn_downerup, maybe_spawn_lucky,
     maybe_spawn_portal_pair, random_free_cell,
 )
 from particles import ParticleSystem
@@ -63,7 +65,9 @@ from audio import SoundBank
 import persistence
 import network
 import updater
-from build_info import STORE
+from build_info import STORE as _STORE, DEV
+
+STORE = "dev" if DEV else _STORE  # a dev build never auto-updates
 from quests import quests_for_date
 import gfx
 import ui
@@ -76,7 +80,7 @@ os.environ.setdefault("SDL_RENDER_SCALE_QUALITY", "linear")  # smooth, not block
 pygame.init()
 from pygame._sdl2 import controller as sdl_controller
 sdl_controller.init()
-pygame.display.set_caption("MEGA SNAKE")
+pygame.display.set_caption("MEGA SNAKE [DEV]" if DEV else "MEGA SNAKE")
 clock = pygame.time.Clock()
 
 # Render resolution presets (window size). The 1028x528 logical canvas is fitted
@@ -300,12 +304,6 @@ TONGUE_PERIOD = 4.0      # how often the tongue flicks out
 TONGUE_HOLD = 0.18
 GHOST_BOB_PERIOD = 1.4   # one full bob-and-drift loop of the best-run ghost marker's animation
 
-# Near misses: head ends up next to something lethal but survives. Rewards
-# skillful close play instead of only ever reacting to actual death.
-NEAR_MISS_COOLDOWN = 1.2      # don't re-trigger while hugging the same wall/tail
-NEAR_MISS_HITSTOP = 0.1       # real seconds the brief slowdown lasts
-NEAR_MISS_HITSTOP_FACTOR = 0.25  # how slow the game runs during it
-
 # The death pause (board frozen before Game Over) ramps down to near-stopped
 # instead of just holding the last frame - the fatal moment stretches out
 # instead of simply cutting off.
@@ -419,6 +417,8 @@ class Game:
             self._fade_from = screen.copy()  # still the last frame that was drawn
             self._fade_t = FADE_SECONDS
 
+    dev = None  # the cheat console, only in dev builds (devconsole.py)
+
     def __init__(self) -> None:
         self.data = persistence.load()
         self.tracker = AchievementTracker(self.data.get("achievements", []))
@@ -442,6 +442,8 @@ class Game:
         self.pad_active = False  # last real input came from a pad (drives footer hints)
         self._pads: dict = {}  # device index -> open sdl_controller.Controller (must stay open to get events)
         self._stick_dir = {pygame.CONTROLLER_AXIS_LEFTX: 0, pygame.CONTROLLER_AXIS_LEFTY: 0}
+        self._reversed_taps: set = set()
+        self._last_hold_sent: Tuple[int, int] = (0, 0)
         for i in range(sdl_controller.get_count()):
             self._open_pad(i)
 
@@ -609,6 +611,9 @@ class Game:
             self.state = STATE_UPDATE_CHECK
         else:
             self.state = STATE_MENU
+        if DEV:
+            from devconsole import DevConsole
+            self.dev = DevConsole(self)
 
     # ---------- helpers ----------
 
@@ -956,6 +961,22 @@ class Game:
             "tk": self.tick_count,                    # host tick number; a guest shows one tick per snapshot
             "ti": round(self.move_interval(), 4),     # seconds per tick right now, so guests blend at the right pace
         }
+        # Extras the host's sim owns: only on the wire when there is something to show (older guests ignore them).
+        if self.rivals:
+            snap["rivals"] = [{"b": [list(c) for c in r.body], "h": bool(r.hunter)} for r in self.rivals if r.alive]
+        if self.meteors:
+            snap["meteors"] = [[m[0], m[1], round(m[2], 2)] for m in self.meteors]
+        d = self.event_director
+        if d and (d.active or d.incoming):
+            snap["ev"] = {"a": d.active, "r": round(d.remaining, 2), "i": d.incoming, "w": round(d.warn_left, 2)}
+        if self.hazard_roller and self.hazard_roller.active:
+            snap["hz"] = [self.hazard_roller.active, round(self.hazard_roller.remaining, 2)]
+        if self.arcade_goal is not None:
+            snap["goal"] = list(self.arcade_goal)
+        if self.graves:
+            snap["graves"] = [[PTAGS.index(t), g[0][0], g[0][1], round(g[1], 1)] for t, g in self.graves.items()]
+        if self.arcade_mode == "Reversed":
+            snap["lvl"] = self.reversed_level
         # mode/ruleset/map/skin never change once a match is running, so only
         # put them on the wire once per session instead of on every one of
         # the ~10 snapshots/sec this gets called for over a match's lifetime.
@@ -998,9 +1019,11 @@ class Game:
                 snake.tail_pop_anim = 0.0   # ...and the new tail segment's pop when it grows
             self.players_alive[i] = pdata["alive"]
 
-        self.foods = [Food(f["x"], f["y"], f["kind"]) for f in snap["foods"]]
+        self.foods = [Food(f["x"], f["y"], f["kind"]) for f in snap["foods"] if f["kind"] in FOOD_COLORS]
         self.powerups = [PowerUp(p["x"], p["y"], p["kind"]) for p in snap["powerups"]]
         self.downerups = [Downerup(d["x"], d["y"], d["kind"]) for d in snap.get("downerups", [])]
+        # An older host still sends the mushroom as a food kind; show it as the downerup it is now.
+        self.downerups += [Downerup(f["x"], f["y"], DOWNERUP_SHRINK) for f in snap["foods"] if f["kind"] == "shrink"]
         self.obstacles = set(tuple(o) for o in snap["obstacles"])
         self.portal_pair = (tuple(snap["portal_pair"][0]), tuple(snap["portal_pair"][1])) if snap["portal_pair"] else None
         self.active_powerups = dict(snap["active_powerups"])
@@ -1009,9 +1032,35 @@ class Game:
         self.curse_timer = snap["curse_timer"]
         self.time_remaining = snap["time_remaining"]
         self.rivals = []
+        for rd in snap.get("rivals", []):
+            body = [tuple(c) for c in rd.get("b", [])]
+            if not body:
+                continue
+            rival = EnemySnake(body[0][0], body[0][1], hunter=bool(rd.get("h")))
+            rival.body = body
+            if len(body) > 1:
+                rival.direction = (max(-1, min(1, body[0][0] - body[1][0])), max(-1, min(1, body[0][1] - body[1][1])))
+            rival.wrap = self.arcade_mode == "Reversed"
+            self.rivals.append(rival)
+        self.meteors = [list(m) for m in snap.get("meteors", [])]
+        ev = snap.get("ev")
+        self.event_director = types.SimpleNamespace(
+            active=ev.get("a"), remaining=ev.get("r", 0.0), incoming=ev.get("i"), warn_left=ev.get("w", 0.0)
+        ) if isinstance(ev, dict) and (ev.get("a") in EVENTS or ev.get("i") in EVENTS) else None
+        hz = snap.get("hz")
+        self.net_hazard = list(hz) if isinstance(hz, list) and len(hz) == 2 and hz[0] in HAZARDS else None
+        goal = snap.get("goal")
+        self.arcade_goal = (int(goal[0]), int(goal[1])) if isinstance(goal, list) and len(goal) == 2 else self.arcade_goal
+        self.graves = {PTAGS[g[0]]: [(int(g[1]), int(g[2])), float(g[3])]
+                       for g in snap.get("graves", []) if isinstance(g, list) and len(g) == 4 and 0 <= g[0] < len(PTAGS)}
+        if isinstance(snap.get("lvl"), int):
+            self.reversed_level = snap["lvl"]
 
         if snap.get("mode") in MODES:
             self.mode_idx = MODES.index(snap["mode"])
+            self.arcade_mode = None
+        elif snap.get("mode") in ARCADE_MODES:
+            self.arcade_mode = snap["mode"]
         if snap.get("skin_p1") in SKIN_NAMES:
             self.skin_idx = SKIN_NAMES.index(snap["skin_p1"])
         if snap.get("ruleset") in LAN_RULESETS:
@@ -1103,7 +1152,10 @@ class Game:
         self._append_chat(who, text)
         self.sounds.play(self.sounds.chat)
 
-    def _lan_begin_session(self, role: str, match_size: int = 2) -> None:
+    def _lan_begin_session(self, role: str, match_size: int = 2, ruleset: Optional[str] = None) -> None:
+        if ruleset in LAN_RULESETS:  # a guest learns the ruleset from the host's "start" message
+            self.lan_ruleset_name = ruleset
+            self.lan_cfg_override = dict(LAN_RULESETS[ruleset])
         self.lan_role = role
         self.snapshot_accum = 0.0
         self.snapshot_seq = 0
@@ -1116,7 +1168,8 @@ class Game:
         # else: the guest's self.lan_link was already set in _lan_connecting_poll
         self.lan_known_slots = set(self.lan_link.roster.keys()) if role == "host" else set()
         self.mode_idx = MODES.index("Coop")
-        self.reset_run(match_size=match_size)
+        arcade = LAN_RULESETS.get(self.lan_ruleset_name, {}).get("arcade_name")
+        self.reset_run(match_size=match_size, arcade=arcade)
         self.state = STATE_PLAYING
 
     def _lan_channel(self):
@@ -1276,6 +1329,23 @@ class Game:
             self.client_alpha -= 1.0
         self.client_alpha = min(self.client_alpha, 1.0)
 
+    def _hold_vector(self) -> Tuple[int, int]:
+        dirs = self._held_dirs()
+        return ((1 in {d[0] for d in dirs}) - (-1 in {d[0] for d in dirs}),
+                (1 in {d[1] for d in dirs}) - (-1 in {d[1] for d in dirs}))
+
+    def _client_send_hold(self, tap: Optional[Tuple[int, int]] = None) -> None:
+        """Reversed guest: tell the host what we are holding (and the key just tapped, if any)."""
+        vec = self._hold_vector()
+        if tap is None and vec == self._last_hold_sent:
+            return
+        self._last_hold_sent = vec
+        msg = {"type": "hold", "dir": list(vec)}
+        if tap is not None:
+            msg["tap"] = list(tap)
+        if self.lan_link:
+            self.lan_link.send(msg)
+
     def _lan_client_poll(self, dt: float) -> None:
         if not self.lan_link:
             return
@@ -1286,7 +1356,7 @@ class Game:
         for msg in self.lan_link.poll():
             mtype = msg.get("type")
             if mtype == "start":
-                self._lan_begin_session("client")
+                self._lan_begin_session("client", ruleset=msg.get("ruleset"))
             elif mtype == "state":
                 self._enqueue_snapshot(msg)
             elif mtype == "chat":
@@ -1313,6 +1383,8 @@ class Game:
             self.state = STATE_LAN_ERROR
             return
         self._send_heartbeat_if_due()
+        if self.arcade_mode == "Reversed" and self.state == STATE_PLAYING:
+            self._client_send_hold()  # releasing a key (or the stick) has no key-down to report it
         if self.state in (STATE_PLAYING, STATE_PAUSED):
             self._update_trail(dt)
             self.particles.update(dt)
@@ -1325,6 +1397,7 @@ class Game:
         if sender not in PTAGS or not self._snake_alive(sender):
             return
         self._kill_snake(sender, "Left the game.")
+        self.graves.pop(sender, None)  # they're gone for good; nobody can revive them
         if not self.lan_online:  # Online's relay already told everyone else
             self.lan_link.send({"type": "_slot_gone", "slot": sender})
 
@@ -1449,6 +1522,20 @@ class Game:
         self.foods: List[Food] = []
         self.powerups: List[PowerUp] = []
         self.downerups: List[Downerup] = []
+        self.luckyblocks: List[LuckyBlock] = []
+        self.net_hazard: Optional[list] = None  # a guest's copy of the host's active hazard [id, seconds left]
+        self.graves: Dict[str, list] = {}       # Reversed co-op: tag -> [cell, seconds left]
+        self.net_hold: Dict[str, Tuple[int, int]] = {}  # Reversed co-op: what each guest is holding
+        self.net_taps: Dict[str, set] = {}
+        self.lucky_on = False
+        self.lucky_mult = 1.0
+        self.invincible_timer = 0.0  # Lucky Block: nothing can kill you
+        self.warp_timer = 0.0        # Lucky Block Teleport: Space opens the target picker while this runs
+        self.warp_selecting = False  # the picker is open (the run is frozen behind it)
+        self.warp_list: list = []    # what the picker can choose from, nearest first
+        self.warp_cursor = 0
+        self.warp_fx: Optional[dict] = None  # the teleport animation while it plays
+        self.bonus_coins = 0         # Lucky Block coins, paid out with the run's coins
         self.active_powerups: Dict[str, float] = {}
         self.portal_pair: Optional[Tuple[Tuple[int, int], Tuple[int, int]]] = None
         self.p1_portal_lock = 0
@@ -1474,9 +1561,6 @@ class Game:
         self.trail_last_tail: Optional[Tuple[int, int]] = None
         self.trail_seq = 0
         self.score_popups: List[list] = []  # [px, py, text, color, age, big]
-        self.near_miss_cooldown = 0.0
-        self.hitstop_timer = 0.0
-        self.hitstop_factor = 1.0
         self.zoom_timer = 0.0
         self.zoom_duration = 0.18
         self.zoom_mag = 0.07
@@ -1500,7 +1584,7 @@ class Game:
             length=len(self.player.body), score=0, speed_tier=0,
             wall_phases=0, time_alive=0.0,
             combo_peak=1, length_peak=len(self.player.body),
-            powerups_collected=0, portals_used=0, near_misses=0,
+            powerups_collected=0, portals_used=0, lucky_opened=0,
             events_survived=0, perks_picked=0, meteors_dodged=0,
         )
 
@@ -1515,7 +1599,12 @@ class Game:
         self.temp_obstacles = set()
         solo = self.lan_role is None and not cfg["coop"]
         self.perks_on = bool(cfg.get("perks")) and solo
-        self.hazard_roller = HazardRoller(random.Random()) if cfg.get("hazards") and solo else None
+        self.lucky_on = solo and bool(cfg["powerups"])
+        self.lucky_mult = cfg.get("lucky_mult", 1)
+        # Chaos events and Hardcore hazards run on the authoritative sim, so a LAN/online host can have them
+        # too (it streams their state); a guest never rolls its own.
+        sim_here = self.lan_role != "client"
+        self.hazard_roller = HazardRoller(random.Random()) if cfg.get("hazards") and sim_here else None
         self.meteors = []
         self.pending_meteors = []
         self.tremor_timer = 0.0
@@ -1524,7 +1613,7 @@ class Game:
         self.resume_countdown = 0.0
         self._count_n = 0
         self.event_director = None
-        if cfg.get("events") and solo:
+        if cfg.get("events") and sim_here:
             if cfg["seeded"]:
                 today = datetime.date.today().isoformat()
                 self.event_director = EventDirector(random.Random("events" + today), featured=featured_event(today))
@@ -1567,15 +1656,22 @@ class Game:
         Arcade modes - everything generic (snake spawn, stats, timer, HUD) is already
         handled by the normal reset_run() body above via their MODE_CONFIG entries."""
         if self.arcade_mode == "Hunter Gauntlet":
-            self.rivals.append(EnemySnake(GRID_W - 5, GRID_H - 5, hunter=True))
+            spots = [(GRID_W - 5, GRID_H - 5), (4, 4), (GRID_W - 5, 4), (4, GRID_H - 5)]
+            for i in range(1 + (self.match_size - 1) // 2):  # a second hunter once there are three or four of you
+                self.rivals.append(EnemySnake(*spots[i], hunter=True))
         elif self.arcade_mode == "Maze Escape":
             self._setup_arcade_maze()
         elif self.arcade_mode == "Reversed":
             self.reversed_level = 1
-            self.rivals.append(EnemySnake(*self._reversed_spawn_point(0), hunter=True))
-            # You're a single apple, not a growing snake - no neck to trip over.
-            self.player.body = deque([self.player.body[0]])
-            self.player.prev_body = list(self.player.body)
+            # One hunter, plus one more for every extra apple in a multiplayer match.
+            for i in range(max(1, self.match_size)):
+                self.rivals.append(self._reversed_hunter(i))
+            # You're a single apple, not a snake: it never moves by itself, only while you hold keys.
+            self._reversed_taps = set()
+            for p in self.players:
+                if p is not None:
+                    p.body = deque([p.body[0]])
+                    p.prev_body = list(p.body)
 
     # Evenly spread around the board's perimeter/corners so a fresh hunter doesn't spawn
     # on top of the player (who starts near the centre) or right next to another hunter.
@@ -1587,6 +1683,58 @@ class Game:
 
     def _reversed_spawn_point(self, i: int) -> Tuple[int, int]:
         return self._REVERSED_SPAWNS[i % len(self._REVERSED_SPAWNS)]
+
+    def _reversed_hunter(self, i: int) -> EnemySnake:
+        h = EnemySnake(*self._reversed_spawn_point(i), hunter=True)
+        h.wrap = True  # the apple wraps around the edges, so its hunters must too
+        return h
+
+    def _held_dirs(self) -> set:
+        """Unit directions currently held on keys, d-pad or left stick."""
+        k = pygame.key.get_pressed()
+        dirs = set()
+        if k[pygame.K_RIGHT] or k[pygame.K_d] or k[pygame.K_l]:
+            dirs.add((1, 0))
+        if k[pygame.K_LEFT] or k[pygame.K_a] or k[pygame.K_h]:
+            dirs.add((-1, 0))
+        if k[pygame.K_DOWN] or k[pygame.K_s] or k[pygame.K_j]:
+            dirs.add((0, 1))
+        if k[pygame.K_UP] or k[pygame.K_w] or k[pygame.K_k]:
+            dirs.add((0, -1))
+        sx, sy = self._stick_dir.get(pygame.CONTROLLER_AXIS_LEFTX, 0), self._stick_dir.get(pygame.CONTROLLER_AXIS_LEFTY, 0)
+        if sx:
+            dirs.add((sx, 0))
+        if sy:
+            dirs.add((0, sy))
+        for pad in self._pads.values():
+            try:
+                for btn, d in ((pygame.CONTROLLER_BUTTON_DPAD_UP, (0, -1)), (pygame.CONTROLLER_BUTTON_DPAD_DOWN, (0, 1)),
+                               (pygame.CONTROLLER_BUTTON_DPAD_LEFT, (-1, 0)), (pygame.CONTROLLER_BUTTON_DPAD_RIGHT, (1, 0))):
+                    if pad.get_button(btn):
+                        dirs.add(d)
+            except Exception:
+                pass
+        return dirs
+
+    def _reversed_input(self, tag: str = "p1") -> Optional[Tuple[int, int]]:
+        """Reversed: which way the apple moves this step, or None to stay put. It only moves while you hold a
+        direction (keys, d-pad or stick), plus any key tapped since the last step so a quick tap still counts;
+        two perpendicular directions together move it diagonally."""
+        if tag != "p1":  # a guest's apple: what they are holding, as the host last heard it, plus their taps
+            dirs = set(self.net_taps.pop(tag, set()))
+            hx, hy = self.net_hold.get(tag, (0, 0))
+            if hx:
+                dirs.add((hx, 0))
+            if hy:
+                dirs.add((0, hy))
+            dx = (1 in {d[0] for d in dirs}) - (-1 in {d[0] for d in dirs})
+            dy = (1 in {d[1] for d in dirs}) - (-1 in {d[1] for d in dirs})
+            return (dx, dy) if dx or dy else None
+        dirs = set(self._reversed_taps) | self._held_dirs()
+        self._reversed_taps = set()
+        dx = (1 in {d[0] for d in dirs}) - (-1 in {d[0] for d in dirs})
+        dy = (1 in {d[1] for d in dirs}) - (-1 in {d[1] for d in dirs})
+        return (dx, dy) if dx or dy else None
 
     def _setup_arcade_maze(self) -> None:
         """Procedurally carves a maze with a randomized DFS ('recursive backtracker') on a
@@ -1645,7 +1793,8 @@ class Game:
         # that corridor exists; it's trivially connected through the pocket either way.
         obstacles.discard((sx + 2, sy))
         self.obstacles = obstacles
-        self.player = PlayerSnake(sx, sy)
+        for i in range(max(1, self.match_size)):  # everyone starts in the same pocket (they pass through each other)
+            self.players[i] = PlayerSnake(sx, sy)
         self.arcade_goal = to_grid(*farthest)
 
     def _arcade_win(self) -> None:
@@ -1662,8 +1811,9 @@ class Game:
 
     def occupied_cells(self) -> set:
         occ = set(self.player.body) | self.obstacles
-        if self.player2 and self.player2_alive:
-            occ |= set(self.player2.body)
+        for i in range(1, self.match_size):
+            if self.players[i] is not None and self.players_alive[i]:
+                occ |= set(self.players[i].body)
         for r in self.rivals:
             if r.alive:
                 occ |= r.occupies()
@@ -1673,6 +1823,8 @@ class Game:
             occ.add((p.x, p.y))
         for d in self.downerups:
             occ.add((d.x, d.y))
+        for b in self.luckyblocks:
+            occ.add((b.x, b.y))
         if self.portal_pair:
             occ.add(self.portal_pair[0])
             occ.add(self.portal_pair[1])
@@ -1817,16 +1969,18 @@ class Game:
         self._update_tremor(dt)
 
     def _spawn_meteor(self) -> None:
-        if not self.player_alive:
+        alive = [i for i in range(self.match_size) if self.players[i] is not None and self.players_alive[i]]
+        if not alive:
             return
-        body = list(self.player.body)
+        target = self.players[random.choice(alive)]  # in a match, any of the living players
+        body = list(target.body)
         r = random.random()
         if r < 0.5:
-            cx, cy = self.player.head
+            cx, cy = target.head
         elif r < 0.75:
             cx, cy = random.choice(body)
         else:  # somewhere near you, so you also have to watch the board, not just yourself
-            hx, hy = self.player.head
+            hx, hy = target.head
             cx, cy = hx + random.randint(-7, 7), hy + random.randint(-5, 5)
         cx = max(1, min(GRID_W - 2, cx))
         cy = max(1, min(GRID_H - 2, cy))
@@ -1845,15 +1999,20 @@ class Game:
                 self._spawn_food()
         self.powerups = [p for p in self.powerups if (p.x, p.y) not in zone]
         self.downerups = [d for d in self.downerups if (d.x, d.y) not in zone]
-        if not self.player_alive or POWERUP_GHOST in self.active_powerups:
+        if self._phased():
             return
-        if any(tuple(c) in zone for c in self.player.body):
-            if self._consume_save("p1"):
-                self.particles.burst(*grid_to_px(*self._center(self.player.head)), (120, 255, 190), count=20)
-            else:
-                self._kill_snake("p1", _death_reason("meteor"))
-        else:
-            self.stats["meteors_dodged"] += 1
+        for i in range(self.match_size):
+            snake = self.players[i]
+            if snake is None or not self.players_alive[i]:
+                continue
+            tag = PTAGS[i]
+            if any(tuple(c) in zone for c in snake.body):
+                if self._consume_save(tag):
+                    self.particles.burst(*grid_to_px(*self._center(snake.head)), (120, 255, 190), count=20)
+                else:
+                    self._kill_snake(tag, _death_reason("meteor"))
+            elif i == 0:
+                self.stats["meteors_dodged"] += 1
 
     def _update_tremor(self, dt: float) -> None:
         if self.tremor_timer <= 0:
@@ -1900,16 +2059,76 @@ class Game:
         self._start_countdown()
         return True
 
+    def _hunter_pileups(self) -> None:
+        """A hunter whose head runs into another hunter dies, like any snake in a normal run
+        (head-on, both die)."""
+        hunters = [r for r in self.rivals if r.hunter and r.alive]
+        dead = [h for h in hunters if any(o is not h and h.head in o.body for o in hunters)]
+        for h in dead:
+            h.alive = False
+            self.particles.burst(*grid_to_px(*self._center(h.head)), EVENTS[EVENT_HUNTER].color, count=24)
+            self.sounds.play(self.sounds.menu_move)
+
+    def _hunter_target(self, rival: EnemySnake) -> Tuple[int, int]:
+        """What a hunter chases: the nearest living player's head (the only one, solo)."""
+        best, best_d = rival.head, None
+        for i in range(self.match_size):
+            p = self.players[i]
+            if p is None or not self.players_alive[i]:
+                continue
+            ax, ay = abs(p.head[0] - rival.head[0]), abs(p.head[1] - rival.head[1])
+            if rival.wrap:
+                ax, ay = min(ax, GRID_W - ax), min(ay, GRID_H - ay)
+            if best_d is None or ax + ay < best_d:
+                best, best_d = p.head, ax + ay
+        return best
+
+    def _hunter_ate(self, hunter: EnemySnake, tag: str) -> None:
+        """Reversed: a hunter that eats an apple grows - and everyone sees whose it was."""
+        hunter.grow_pending += REVERSED_EAT_GROWTH
+        self.particles.burst(*grid_to_px(*self._center(hunter.head)), (255, 90, 90), count=26, speed=220)
+        if self.match_size > 1:
+            self._announce(f"{PLAYER_LABELS[PTAGS.index(tag)]} GOT EATEN!", DANGER, life=1.2)
+
     def _hunter_check(self, hunter: EnemySnake) -> None:
-        if not hunter.alive or not self.player_alive or POWERUP_GHOST in self.active_powerups:
+        if not hunter.alive or self._phased():
             return
-        if hunter.head not in set(self.player.body):
-            return
-        if self._consume_save("p1"):
-            hunter.alive = False  # the hunter is spent after being fended off
-            self.particles.burst(*grid_to_px(*self._center(hunter.head)), EVENTS[EVENT_HUNTER].color, count=24)
-        else:
-            self._kill_snake("p1", _death_reason("hunter"))
+        for i in range(self.match_size):
+            snake = self.players[i]
+            if snake is None or not self.players_alive[i] or hunter.head not in set(snake.body):
+                continue
+            tag = PTAGS[i]
+            if self._consume_save(tag):
+                hunter.alive = False  # the hunter is spent after being fended off
+                self.particles.burst(*grid_to_px(*self._center(hunter.head)), EVENTS[EVENT_HUNTER].color, count=24)
+                return
+            if self.arcade_mode == "Reversed":
+                self._hunter_ate(hunter, tag)
+            self._kill_snake(tag, _death_reason("hunter"))
+
+    # ---------- Reversed with friends: graves and revives ----------
+
+    def _check_graves(self) -> None:
+        """A living apple that steps onto a fallen friend's grave brings them back."""
+        for tag, (cell, _left) in list(self.graves.items()):
+            for i in range(self.match_size):
+                if self.players_alive[i] and PTAGS[i] != tag and self.players[i].head == cell:
+                    self._revive_apple(tag, cell, PTAGS[i])
+                    break
+
+    def _revive_apple(self, tag: str, cell: Tuple[int, int], by: Optional[str] = None) -> None:
+        idx = PTAGS.index(tag)
+        snake = self.players[idx]
+        snake.body = deque([cell])
+        snake.prev_body = list(snake.body)
+        self.players_alive[idx] = True
+        self.graves.pop(tag, None)
+        self.last_death_reason.pop(tag, None)
+        self.active_powerups[POWERUP_GHOST] = max(self.active_powerups.get(POWERUP_GHOST, 0.0), 2.0)  # a breather
+        self.particles.burst(*grid_to_px(*self._center(cell)), self.powerup_color(POWERUP_REVIVE), count=34, speed=240)
+        self.sounds.play(self.sounds.unlock)
+        who = f"{PLAYER_LABELS[idx]} REVIVED" + (f" BY {PLAYER_LABELS[PTAGS.index(by)]}!" if by else "!")
+        self._announce(who, self.powerup_color(POWERUP_REVIVE), life=1.5)
 
     def _maybe_offer_perk(self) -> None:
         if not self.perks_on or self.state != STATE_PLAYING:
@@ -1960,12 +2179,14 @@ class Game:
         speed_mult = cfg["speed_mult"] * DIFFICULTY_SPEED_MULT[self.difficulty]
         interval = (BASE_MOVE_INTERVAL / (1 + tier * 0.15)) / speed_mult
         if self.speed_boost_timer > 0:
-            interval *= 0.55
+            interval *= 0.8
         if POWERUP_SLOWMO in self.active_powerups:
             interval *= 1.7
         interval *= 1 + 0.08 * self.perks.get("featherweight", 0)
         if self.surge_timer > 0:
             interval *= 0.72
+        if self.dev:
+            interval /= self.dev.speed_mult
         return max(0.03, interval)
 
     def update_playing(self, dt: float) -> None:
@@ -1978,7 +2199,23 @@ class Game:
                     if sender in PTAGS[1:] and isinstance(d, list) and len(d) == 2:
                         idx = PTAGS.index(sender)
                         if self.players[idx] is not None:
-                            self.players[idx].set_direction((int(d[0]), int(d[1])))
+                            dv = (max(-1, min(1, int(d[0]))), max(-1, min(1, int(d[1]))))
+                            if self.curse_timer > 0:
+                                dv = (-dv[0], -dv[1])  # Mirror Mode / a Curse reverses everyone's keys
+                            self.players[idx].set_direction(dv)
+                            if self.mode_cfg().get("manual_move") and self.players_alive[idx]:
+                                self._tick(only=sender)  # Maze Escape: this press is this player's one step
+                                self.tick_count += 1
+                                self._send_snapshot()
+                elif mtype == "hold":
+                    # Reversed: an apple only moves while its player holds keys, so a guest reports what
+                    # it is holding (and the key just tapped, so a quick tap still counts for a step).
+                    sender = msg.get("from")
+                    d, tap = msg.get("dir"), msg.get("tap")
+                    if sender in PTAGS[1:] and isinstance(d, list) and len(d) == 2:
+                        self.net_hold[sender] = (max(-1, min(1, int(d[0]))), max(-1, min(1, int(d[1]))))
+                        if isinstance(tap, list) and len(tap) == 2:
+                            self.net_taps.setdefault(sender, set()).add((max(-1, min(1, int(tap[0]))), max(-1, min(1, int(tap[1])))))
                 elif mtype == "client_left":
                     self._lan_player_left(msg.get("from"))
                 elif mtype == "chat":
@@ -2011,6 +2248,10 @@ class Game:
                 self._finalize_game_over()
             return
 
+        if self.warp_selecting or self.warp_fx:  # Lucky Block Teleport: picker / animation
+            self._update_warp(dt)
+            return
+
         if self.resume_countdown > 0:  # 3-2-1 after a clutch save / perk pick: the whole run is frozen
             self.resume_countdown = max(0.0, self.resume_countdown - dt)
             n = math.ceil(self.resume_countdown / RESUME_COUNTDOWN_STEP_SECONDS)
@@ -2026,20 +2267,14 @@ class Game:
             self._update_ambient(dt)
             return
 
-        if self.hitstop_timer > 0:
-            self.hitstop_timer = max(0.0, self.hitstop_timer - dt)
-            dt *= self.hitstop_factor
-        if self.near_miss_cooldown > 0:
-            self.near_miss_cooldown = max(0.0, self.near_miss_cooldown - dt)
-
         self.time_alive += dt
         self.stats["time_alive"] = self.time_alive
 
-        if self.arcade_mode == "Reversed" and self.player_alive:
+        if self.arcade_mode == "Reversed" and any(self.players_alive[:self.match_size]):
             target_level = min(REVERSED_MAX_LEVEL, 1 + int(self.time_alive // REVERSED_LEVEL_SECONDS))
             if target_level > self.reversed_level:
                 self.reversed_level = target_level
-                self.rivals.append(EnemySnake(*self._reversed_spawn_point(len(self.rivals)), hunter=True))
+                self.rivals.append(self._reversed_hunter(len(self.rivals)))
                 self.sounds.play(self.sounds.menu_move)
 
             alive_rivals = [r for r in self.rivals if r.alive]
@@ -2070,6 +2305,16 @@ class Game:
             self.speed_boost_timer = max(0.0, self.speed_boost_timer - dt)
         if self.curse_timer > 0:
             self.curse_timer = max(0.0, self.curse_timer - dt)
+        for tag, grave in list(self.graves.items()):
+            grave[1] -= dt
+            if grave[1] <= 0:
+                del self.graves[tag]  # too late: that apple stays down
+        if self.invincible_timer > 0:
+            self.invincible_timer = max(0.0, self.invincible_timer - dt)
+        if self.warp_timer > 0:
+            self.warp_timer = max(0.0, self.warp_timer - dt)
+            if self.warp_timer <= 0:
+                self._announce("TELEPORT FADED", TEXT_DIM, life=1.0)
         if self.combo_timer > 0:
             self.combo_timer -= dt
             if self.combo_timer <= 0:
@@ -2107,11 +2352,8 @@ class Game:
                         self._consume_food(f, self.player, auto=True)
                         break
 
-        heads_now = []
-        if self.player_alive:
-            heads_now.append(self.player.head)
-        if self.player2 and self.player2_alive:
-            heads_now.append(self.player2.head)
+        heads_now = [self.players[i].head for i in range(self.match_size)
+                     if self.players[i] is not None and self.players_alive[i]]
 
         for p in list(self.powerups):
             p.ttl -= dt
@@ -2139,6 +2381,15 @@ class Game:
         if new_d:
             self.downerups.append(new_d)
 
+        for b in list(self.luckyblocks):
+            b.ttl -= dt
+            if b.ttl <= 0:
+                self.luckyblocks.remove(b)
+        if self.lucky_on:
+            new_b = maybe_spawn_lucky(self.occupied_cells(), self.luckyblocks, dt, self.lucky_mult)
+            if new_b:
+                self.luckyblocks.append(new_b)
+
         active = self.players_alive[:self.match_size]
         if cfg["coop"] and any(active) and not all(active):
             if not any(p.kind == POWERUP_REVIVE for p in self.powerups) and random.random() < 0.015:
@@ -2161,6 +2412,10 @@ class Game:
 
         self.move_accum += dt
         interval = self.move_interval()
+        if cfg.get("manual_move") and self.lan_role == "host":
+            self.snapshot_accum += dt  # the timer and teammates' steps still need to reach the guests
+            if self.snapshot_accum >= 0.25:
+                self._send_snapshot()
         if not cfg.get("manual_move") and self.move_accum >= interval:
             self.move_accum -= interval
             self._tick()
@@ -2301,6 +2556,176 @@ class Game:
             occ.add((x, y))
             placed += 1
 
+    def _phased(self) -> bool:
+        """Ghost or Lucky-Block invincibility: walls, bodies, hunters and meteors can't hurt you."""
+        return POWERUP_GHOST in self.active_powerups or self.invincible_timer > 0 or bool(self.dev and self.dev.god)
+
+    def lucky_color(self) -> Tuple[int, int, int]:
+        return COLORBLIND_LUCKY_COLOR if self.colorblind else LUCKY_COLOR
+
+    def _open_lucky_block(self, effect: Optional[str] = None) -> None:
+        """Apply a Lucky Block effect to p1 (the block only spawns in solo runs): a random one, or `effect`
+        when the dev console forces it."""
+        hx, hy = self.player.head
+        px, py = grid_to_px(*self._center((hx, hy)))
+        color = self.lucky_color()
+        self.stats["lucky_opened"] += 1
+        self.sounds.play(self.sounds.unlock)
+        self.particles.burst(px, py, color, count=32, speed=240)
+        self.shake(0.2, 4)
+        if effect is None:
+            effect = random.choices([e for e, _ in LUCKY_EFFECTS], weights=[w for _, w in LUCKY_EFFECTS], k=1)[0]
+        say = lambda text, c=color: self._announce("LUCKY! " + text, c, life=1.4)
+        if effect == "mushroom":
+            say("MUSHROOM", self.downerup_color(DOWNERUP_SHRINK))
+            self._consume_downerup("p1", Downerup(hx, hy, DOWNERUP_SHRINK))
+        elif effect == "curse":
+            say("CURSE", self.downerup_color(DOWNERUP_CURSE))
+            self._consume_downerup("p1", Downerup(hx, hy, DOWNERUP_CURSE))
+        elif effect in ("golden", "apple"):
+            kind = FOOD_GOLDEN if effect == "golden" else FOOD_NORMAL
+            say("GOLDEN APPLE" if effect == "golden" else "APPLE", self.food_color(kind))
+            f = Food(hx, hy, kind, temp=True)
+            self.foods.append(f)
+            self._consume_food(f, self.player)
+        elif effect == "coins":
+            n = random.randint(*LUCKY_COINS)
+            self.bonus_coins += n
+            say(f"+{n} COINS")
+            self._spawn_score_popup(px, py, f"+{n} coins", GOLD, big=True)
+        elif effect == "powerup":
+            kind = random.choice([POWERUP_GHOST, POWERUP_MAGNET, POWERUP_SHIELD, POWERUP_SLOWMO,
+                                  POWERUP_MULT, POWERUP_FREEZE])
+            say(kind.upper(), self.powerup_color(kind))
+            self._activate_powerup(kind)
+        elif effect == "invincible":
+            say(f"INVINCIBLE {INVINCIBLE_DURATION:0.0f}s")
+            self.invincible_timer = INVINCIBLE_DURATION
+        elif effect == "teleport":
+            say("TELEPORT - press SPACE!")
+            self.warp_timer = WARP_DURATION
+        self._unlock("lucky_find")
+
+    def _warp_targets(self) -> list:
+        """Things the Warp marker can land on, nearest first: food, power-ups and other Lucky Blocks
+        (never a bomb or other downerup)."""
+        hx, hy = self.player.head
+        things = list(self.foods) + list(self.powerups) + list(self.luckyblocks)
+        things.sort(key=lambda t: abs(t.x - hx) + abs(t.y - hy))
+        return things[:12]
+
+    def _warp_begin(self) -> None:
+        """Space during Teleport: open the picker over the frozen board."""
+        targets = self._warp_targets()
+        if not targets:
+            self._announce("NOTHING TO TELEPORT TO", TEXT_DIM, life=1.0)
+            return
+        self.warp_list = targets
+        self.warp_cursor = 0
+        self.warp_selecting = True
+        self.sounds.play(self.sounds.menu_select)
+
+    def _warp_key(self, key) -> None:
+        """Keys while the picker is open: arrows/WASD/hjkl move the cursor, Space/Enter go, Esc backs out."""
+        if key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER):
+            self._warp_go(self.warp_list[self.warp_cursor])
+            return
+        if key == pygame.K_ESCAPE:
+            self.warp_selecting = False
+            self.sounds.play(self.sounds.menu_move)
+            return
+        d = None
+        if key in (pygame.K_UP, pygame.K_w, pygame.K_k):
+            d = (0, -1)
+        elif key in (pygame.K_DOWN, pygame.K_s, pygame.K_j):
+            d = (0, 1)
+        elif key in (pygame.K_LEFT, pygame.K_a, pygame.K_h):
+            d = (-1, 0)
+        elif key in (pygame.K_RIGHT, pygame.K_d, pygame.K_l):
+            d = (1, 0)
+        if key == pygame.K_TAB:
+            self.warp_cursor = (self.warp_cursor + 1) % len(self.warp_list)
+            self.sounds.play(self.sounds.menu_move)
+        elif d:
+            cur = self.warp_list[self.warp_cursor]
+            best, best_score = None, None
+            for i, t in enumerate(self.warp_list):
+                if i == self.warp_cursor:
+                    continue
+                dx, dy = t.x - cur.x, t.y - cur.y
+                along = dx * d[0] + dy * d[1]
+                if along <= 0:
+                    continue  # not that way
+                score = along + 2 * (abs(dx * d[1]) + abs(dy * d[0]))  # prefer what is straight ahead
+                if best_score is None or score < best_score:
+                    best, best_score = i, score
+            if best is None:  # nothing further that way: wrap around the list instead
+                best = (self.warp_cursor + (1 if d[0] + d[1] > 0 else -1)) % len(self.warp_list)
+            self.warp_cursor = best
+            self.sounds.play(self.sounds.menu_move)
+
+    def _warp_go(self, target) -> None:
+        """Confirm the pick: start the animation; the snake itself moves partway through (_warp_land)."""
+        self.warp_selecting = False
+        self.warp_timer = 0.0
+        self.warp_fx = {"t": 0.0, "src": self.player.head, "dest": (target.x, target.y), "target": target,
+                        "body": list(self.player.body), "moved": False}
+        px, py = grid_to_px(*self._center(self.player.head))
+        color = self.lucky_color()
+        self.particles.burst(px, py, (255, 255, 255), count=34, speed=120, life=0.5)
+        self.particles.burst(px, py, color, count=34, speed=260, life=0.6)
+        self.shake(0.3, 4)
+        self.sounds.play(self.sounds.teleport)
+
+    def _warp_land(self) -> None:
+        """Halfway through the animation: move the whole snake onto the target and take it."""
+        fx = self.warp_fx
+        target, snake = fx["target"], self.player
+        fx["moved"] = True
+        hx, hy = snake.head
+        dx, dy = target.x - hx, target.y - hy
+        snake.body = deque(((bx + dx) % GRID_W, (by + dy) % GRID_H) for bx, by in snake.body)
+        snake.prev_body = list(snake.body)
+        self.p1_portal_lock = 1
+        # A brief grace so a snake that lands half inside a wall isn't killed by the landing.
+        self.active_powerups[POWERUP_GHOST] = max(self.active_powerups.get(POWERUP_GHOST, 0.0), 1.5)
+        px, py = grid_to_px(*self._center((target.x, target.y)))
+        color = self.lucky_color()
+        self.particles.burst(px, py, (255, 255, 255), count=46, speed=300, life=0.7)
+        self.particles.burst(px, py, color, count=56, speed=380, life=0.9)
+        self.particles.burst(px, py, (92, 200, 255), count=30, speed=200, life=0.8)
+        self.shake(0.45, 8)
+        self.sounds.play(self.sounds.portal)
+        if isinstance(target, Food):
+            self._consume_food(target, snake)
+        elif isinstance(target, PowerUp):
+            if target in self.powerups:
+                self.powerups.remove(target)
+            self._activate_powerup(target.kind)
+        else:
+            if target in self.luckyblocks:
+                self.luckyblocks.remove(target)
+            self._open_lucky_block()
+
+    def _update_warp(self, dt: float) -> None:
+        """Run frozen while the picker is open or the animation plays: only the effects keep moving."""
+        for a in self.announcer_queue:
+            a[2] -= dt
+        self.announcer_queue = [a for a in self.announcer_queue if a[2] > 0]
+        for p in self.score_popups:
+            p[4] += dt
+        self.score_popups = [p for p in self.score_popups if p[4] < SCORE_POPUP_DURATION]
+        self.particles.update(dt)
+        self._update_ambient(dt)
+        fx = self.warp_fx
+        if fx:
+            fx["t"] += dt
+            if not fx["moved"] and fx["t"] >= WARP_FX_LAND * WARP_FX_SECONDS:
+                self._warp_land()
+            if fx["t"] >= WARP_FX_SECONDS:
+                self.warp_fx = None
+                self.move_accum = 0.0
+
     def _activate_powerup(self, kind: str) -> None:
         self.stats["powerups_collected"] += 1
         px, py = grid_to_px(*self._center(self.player.head))
@@ -2340,10 +2765,12 @@ class Game:
         if spot is None:
             spot = random_free_cell(occ)
 
-        dead_snake.body = deque([spot, (spot[0] - 1, spot[1]), (spot[0] - 2, spot[1])])
+        dead_snake.body = deque([spot] if self.arcade_mode == "Reversed" else
+                                [spot, (spot[0] - 1, spot[1]), (spot[0] - 2, spot[1])])
         dead_snake.prev_body = list(dead_snake.body)
+        self.graves.pop(dead_tag, None)
         dead_snake.direction = (1, 0)
-        dead_snake.pending_direction = (1, 0)
+        dead_snake.clear_queue()
 
         self.players_alive[dead_idx] = True
 
@@ -2394,27 +2821,11 @@ class Game:
             quests_today=len(self.data.get("quests", {}).get("completed", [])),
         )
 
-    def _check_near_miss(self, cfg: dict) -> None:
-        """A whoosh (+ optional brief slow-mo) when the head survives next to something
-        that would have killed it - skill gets its own feedback, not just
-        "you didn't die." Scoped to p1 only; see the hitstop fields."""
-        hx, hy = self.player.head
-        blocked = self._blocking_set("p1")
-        own_tail = set(list(self.player.body)[3:])  # skip head+neck: always adjacent, not a "miss"
-        for nx, ny in ((hx + 1, hy), (hx - 1, hy), (hx, hy + 1), (hx, hy - 1)):
-            off_grid = not cfg["wrap"] and not (0 <= nx < GRID_W and 0 <= ny < GRID_H)
-            if off_grid or (nx, ny) in blocked or (nx, ny) in own_tail:
-                self.near_miss_cooldown = NEAR_MISS_COOLDOWN
-                self.stats["near_misses"] += 1
-                if self.settings["near_miss_slowmo"]:
-                    self.hitstop_timer = NEAR_MISS_HITSTOP
-                    self.hitstop_factor = NEAR_MISS_HITSTOP_FACTOR
-                self.sounds.play(self.sounds.near_miss)
-                return
-
-    def _tick(self) -> None:
+    def _tick(self, only: Optional[str] = None) -> None:
+        """One grid step of the whole sim, or (only=tag) of just that player's snake: Maze Escape steps on
+        key presses, so in a match each player's press moves only their own snake."""
         cfg = self.mode_cfg()
-        ghost = POWERUP_GHOST in self.active_powerups
+        ghost = self._phased()
         wrap = cfg["wrap"] or ghost
 
         movers: List[Tuple[str, PlayerSnake]] = []
@@ -2424,11 +2835,19 @@ class Game:
             for i in range(1, self.match_size):
                 if self.players[i] is not None and self.players_alive[i]:
                     movers.append((PTAGS[i], self.players[i]))
+        if only is not None:
+            movers = [m for m in movers if m[0] == only]
 
         prev_heads = {}
         for tag, snake in movers:
             prev_heads[tag] = snake.head
-            snake.step(wrap=wrap)
+            if self.arcade_mode == "Reversed":
+                move = self._reversed_input(tag)
+                if move is None:
+                    continue  # the apple only moves while you steer it
+                snake.step(wrap=wrap, override=move)
+            else:
+                snake.step(wrap=wrap)
 
         for tag, snake in movers:
             nx, ny = snake.head
@@ -2446,12 +2865,12 @@ class Game:
             if self._snake_alive(tag):
                 self._check_portal(tag, snake)
 
-        if self.arcade_mode == "Maze Escape" and self.player_alive and self.player.head == self.arcade_goal:
+        if self.arcade_mode == "Maze Escape" and any(s.head == self.arcade_goal for _, s in movers if self._snake_alive(_)):
             self._arcade_win()
             return
 
-        if self.player_alive and self.near_miss_cooldown <= 0:
-            self._check_near_miss(cfg)
+        if self.arcade_mode == "Reversed":
+            self._check_graves()
 
         for tag, snake in movers:
             if self._snake_alive(tag):
@@ -2463,6 +2882,10 @@ class Game:
                     if (d.x, d.y) == (hx, hy):
                         self.downerups.remove(d)
                         self._consume_downerup(tag, d)
+                for b in list(self.luckyblocks):
+                    if (b.x, b.y) == (hx, hy):
+                        self.luckyblocks.remove(b)
+                        self._open_lucky_block()
 
         if self.ghost_enabled and self.player_alive:
             if len(self.recording_trail) < GHOST_MAX_TICKS:
@@ -2478,13 +2901,13 @@ class Game:
                     rival.move_phase = (rival.move_phase + 1) % 3
                     if rival.move_phase == 0:
                         continue  # a hunter only moves 2 ticks in 3, so it can be outrun
-                    target = self.player.head if self.player_alive else rival.head
+                    target = self._hunter_target(rival)
                 else:
                     target = (self.foods[0].x, self.foods[0].y) if self.foods else rival.head
                 blocked = set(self.obstacles)
                 for other in self.rivals:
-                    if other is not rival and other.alive:
-                        blocked |= other.occupies()
+                    if other is not rival and other.alive and not (rival.hunter and other.hunter):
+                        blocked |= other.occupies()  # hunters don't dodge each other: touching is fatal
                 rival.choose_direction(target, blocked)
                 grow = False
                 for f in ([] if rival.hunter else list(self.foods)):
@@ -2498,6 +2921,7 @@ class Game:
                 rival.step(grow)
                 if rival.hunter:
                     self._hunter_check(rival)
+            self._hunter_pileups()
             self.rivals = [r for r in self.rivals if r.alive or not r.hunter]
 
         if self._event_active(EVENT_FRENZY):
@@ -2520,7 +2944,7 @@ class Game:
         if (nx, ny) in self.obstacles:
             return True, _death_reason("obstacle")
 
-        if cfg["coop"]:
+        if cfg["coop"] and self.arcade_mode not in ("Reversed", "Maze Escape"):  # apples and maze runners pass through each other
             my_idx = PTAGS.index(tag)
             for i, other in enumerate(self.players):
                 if i == my_idx or other is None or not self.players_alive[i]:
@@ -2529,6 +2953,8 @@ class Game:
                     return True, _death_reason("teammate")
         for r in self.rivals:
             if r.alive and (nx, ny) in r.occupies():
+                if self.arcade_mode == "Reversed":
+                    self._hunter_ate(r, tag)  # the snake that was walked into gets the meal
                 return True, _death_reason("rival")
         return False, ""
 
@@ -2602,7 +3028,7 @@ class Game:
 
         elif f.kind == FOOD_SPEED:
             snake.grow(1)
-            self.speed_boost_timer = 4.0
+            self.speed_boost_timer = 3.0
             gained = self._food_score(10 * mult)
             self.score += gained
             self.score_breakdown["normal"] += 10
@@ -2612,14 +3038,6 @@ class Game:
             self._rumble(0.0, 0.3, 70)
             self.particles.burst(px, py, self.food_color(FOOD_SPEED), count=14)
             self._spawn_score_popup(px, py, f"+{gained}", self.food_color(FOOD_SPEED))
-
-        elif f.kind == FOOD_SHRINK:
-            snake.shrink(2)
-            self.score = max(0, self.score - 5)
-            self.score_breakdown["penalty"] -= 5
-            self.sounds.play(self.sounds.shrink)
-            self.particles.burst(px, py, self.food_color(FOOD_SHRINK), count=12)
-            self._spawn_score_popup(px, py, "-5", DANGER)
 
         if not f.temp:
             self._spawn_food()
@@ -2641,8 +3059,20 @@ class Game:
             self._announce("CURSED!", self.downerup_color(DOWNERUP_CURSE), life=1.0)
             self._spawn_score_popup(px, py, "-5", DANGER)
 
+        elif d.kind == DOWNERUP_SHRINK:
+            snake = self.players[PTAGS.index(tag)]
+            snake.shrink(2)
+            self.score = max(0, self.score - 5)
+            self.score_breakdown["penalty"] -= 5
+            self.sounds.play(self.sounds.shrink)
+            self.particles.burst(px, py, self.downerup_color(DOWNERUP_SHRINK), count=12)
+            self._spawn_score_popup(px, py, "-5", DANGER)
+
         elif d.kind == DOWNERUP_BOMB:
-            if POWERUP_SHIELD in self.active_powerups or (tag == "p1" and self.perk_lives > 0):
+            if self.invincible_timer > 0 or (self.dev and self.dev.god):
+                self.particles.burst(px, py, LUCKY_COLOR, count=20)
+                self._announce("IMMUNE!", LUCKY_COLOR, life=0.8)
+            elif POWERUP_SHIELD in self.active_powerups or (tag == "p1" and self.perk_lives > 0):
                 if POWERUP_SHIELD in self.active_powerups:
                     del self.active_powerups[POWERUP_SHIELD]
                 else:
@@ -2672,6 +3102,8 @@ class Game:
 
         self.players_alive[PTAGS.index(tag)] = False
         self.last_death_reason[tag] = reason
+        if self.arcade_mode == "Reversed" and self.match_size > 1:
+            self.graves[tag] = [snake.head, REVERSED_GRAVE_SECONDS]  # a friend can walk onto it to revive you
 
         cfg = self.mode_cfg()
         if not cfg["coop"]:
@@ -2683,6 +3115,8 @@ class Game:
             parts = [f"{PLAYER_LABELS[i]}: {self.last_death_reason.get(PTAGS[i], '-')}"
                      for i in range(self.match_size)]
             self.game_over_reason = "   ".join(parts)
+            if self.arcade_mode == "Reversed":
+                self.game_over_reason = f"Every apple got eaten. You lasted {int(self.time_alive)}s."
             self.death_pause_timer = DEATH_PAUSE_SECONDS
 
     def _time_up(self) -> None:
@@ -2690,7 +3124,24 @@ class Game:
         self.sounds.play(self.sounds.achievement)
         self._finalize_game_over()
 
+    def _finalize_lan_arcade(self) -> None:
+        """A multiplayer Arcade match just ends: no coins, bests or achievements (those are for solo Arcade
+        runs), only the shared Game Over screen on every machine."""
+        self.final_stats = {
+            "score": self.score, "food_eaten": self.stats["food_eaten"], "golden_eaten": self.stats["golden_eaten"],
+            "length": self.stats["length_peak"], "time_alive": int(self.time_alive),
+        }
+        self.score_breakdown = {"normal": 0, "golden": 0, "mult_bonus": 0, "penalty": 0}
+        self.run_coins_earned = self.run_streak_bonus = 0
+        self.run_quest_rewards, self.run_new_achievements, self.run_new_ghost = [], [], False
+        if self.lan_role == "host" and self.lan_link and self.lan_link.connected:
+            self.lan_link.send(self._build_snapshot(game_over=True))
+        self.state = STATE_GAME_OVER
+
     def _finalize_game_over(self) -> None:
+        if self.arcade_mode and self.lan_role is not None:
+            self._finalize_lan_arcade()
+            return
         if self.arcade_mode:
             # Arcade runs skip the whole normal end-of-run economy on purpose (coins,
             # quests, streak, leaderboard, ghosts) - otherwise Food Rush in particular
@@ -2716,7 +3167,7 @@ class Game:
         persistence.update_stat_bests(self.data, final)
         persistence.add_run_history(self.data, self.score, self.mode_name(), today_iso)
 
-        self.run_coins_earned = max(0, int(self.score // 25 * (1 + 0.5 * self.perks.get("midas", 0))))
+        self.run_coins_earned = max(0, int(self.score // 25 * (1 + 0.5 * self.perks.get("midas", 0)))) + self.bonus_coins
         self.wallet += self.run_coins_earned
         streak_bonus = persistence.apply_daily_streak(self.data, today_iso, yesterday_iso)
         self.run_streak_bonus = streak_bonus or 0
@@ -3189,12 +3640,37 @@ class Game:
         the actual collision cell, which reads as a wrong/laggy hitbox. Snapping the
         apple to its grid cell too keeps what you see exactly in sync with what kills
         you, at the cost of the smooth glide normal snake movement has."""
-        if not self.player_alive:
-            return
-        hx, hy = self.player.head
-        cx = hx * CELL_SIZE + CELL_SIZE // 2
-        cy = hy * CELL_SIZE + CELL_SIZE // 2
-        self._draw_food_icon(board, FOOD_NORMAL, cx, cy, radius=CELL_SIZE * 0.42)
+        for i in range(self.match_size):
+            p = self.players[i]
+            if p is None or not self.players_alive[i]:
+                continue
+            hx, hy = p.head
+            cx = hx * CELL_SIZE + CELL_SIZE // 2
+            cy = hy * CELL_SIZE + CELL_SIZE // 2
+            if self.match_size > 1:  # with friends: a ring in each player's colour and their label
+                col = SNAKE_SKINS[SKIN_NAMES[self.skin_idx]][0] if i == 0 else PLAYER_COLORS[i][0]
+                gfx.draw.circle(board, col, (int(cx), int(cy)), int(CELL_SIZE * 0.62), width=3)
+                tag = font_tiny.render(PLAYER_LABELS[i], True, col)
+                board.blit(tag, (cx - tag.get_width() // 2, cy - CELL_SIZE * 1.15))
+            self._draw_food_icon(board, FOOD_NORMAL, cx, cy, radius=CELL_SIZE * 0.42)
+
+    def _draw_graves(self, board: pygame.Surface) -> None:
+        """Reversed with friends: where an apple fell. Step onto it with a living apple to revive them."""
+        t = pygame.time.get_ticks() / 1000.0
+        for tag, (cell, left) in self.graves.items():
+            if left < 4.0 and int(left * 5) % 2:
+                continue  # blinks as the chance runs out
+            idx = PTAGS.index(tag)
+            col = SNAKE_SKINS[SKIN_NAMES[self.skin_idx]][0] if idx == 0 else PLAYER_COLORS[idx][0]
+            cx, cy = (cell[0] + 0.5) * CELL_SIZE, (cell[1] + 0.5) * CELL_SIZE
+            pulse = 0.5 + 0.5 * math.sin(t * 5)
+            gfx.draw.circle(board, col, (int(cx), int(cy)), int(CELL_SIZE * (0.75 + 0.15 * pulse)), width=2)
+            stone = pygame.Rect(cx - CELL_SIZE * 0.3, cy - CELL_SIZE * 0.38, CELL_SIZE * 0.6, CELL_SIZE * 0.76)
+            gfx.draw.rect(board, (92, 100, 120), stone, border_top_left_radius=CELL_SIZE // 3, border_top_right_radius=CELL_SIZE // 3, border_radius=3)
+            gfx.draw.line(board, (210, 218, 235), (cx, cy - CELL_SIZE * 0.2), (cx, cy + CELL_SIZE * 0.18), 2)
+            gfx.draw.line(board, (210, 218, 235), (cx - CELL_SIZE * 0.14, cy - CELL_SIZE * 0.06), (cx + CELL_SIZE * 0.14, cy - CELL_SIZE * 0.06), 2)
+            lab = font_tiny.render(f"{PLAYER_LABELS[idx]} {left:.0f}s", True, col)
+            board.blit(lab, (cx - lab.get_width() // 2, cy + CELL_SIZE * 0.45))
 
     def _draw_snake(self, board: pygame.Surface, snake: PlayerSnake, skin: list, alpha: float,
                      ghost_active: bool, alive: bool, name_tag: str) -> None:
@@ -3483,6 +3959,12 @@ class Game:
             cx, cy = d.x * CELL_SIZE + CELL_SIZE // 2, d.y * CELL_SIZE + CELL_SIZE // 2 + dy
             self._draw_downerup_icon(board, d.kind, cx, cy, (CELL_SIZE // 2 - 2) * pulse)
 
+        for b in self.luckyblocks:
+            if b.ttl < 3.0 and int(b.ttl * 6) % 2:
+                continue  # blinks when about to vanish
+            cx, cy = b.x * CELL_SIZE + CELL_SIZE // 2, b.y * CELL_SIZE + CELL_SIZE // 2
+            self._draw_lucky_icon(board, cx, cy, CELL_SIZE // 2 - 2)
+
         self._draw_meteors(board)
 
         for rival in self.rivals:
@@ -3501,11 +3983,13 @@ class Game:
         skin = SNAKE_SKINS[SKIN_NAMES[self.skin_idx]]
         ghost_active = POWERUP_GHOST in self.active_powerups
         if self.arcade_mode == "Reversed":
+            self._draw_graves(board)
             self._draw_reversed_player(board, alpha)
         else:
-            self._draw_snake(board, self.player, skin, alpha, ghost_active, self.player_alive, "p1")
+            if not self._warp_hides_snake():
+                self._draw_snake(board, self.player, skin, alpha, ghost_active, self.player_alive, "p1")
         for i in range(1, self.match_size):
-            if self.players[i] is not None:
+            if self.players[i] is not None and self.arcade_mode != "Reversed":
                 self._draw_snake(board, self.players[i], PLAYER_COLORS[i], alpha, ghost_active,
                                   self.players_alive[i], PTAGS[i])
 
@@ -3514,6 +3998,17 @@ class Game:
             hx, hy = hx % GRID_W, hy % GRID_H
             cx, cy = hx * CELL_SIZE + CELL_SIZE // 2, hy * CELL_SIZE + CELL_SIZE // 2
             gfx.draw.circle(board, self.powerup_color(POWERUP_SHIELD), (int(cx), int(cy)), CELL_SIZE, width=2)
+
+        if self.invincible_timer > 0 and self.player_alive:
+            hx, hy = self.player.render_positions(alpha)[0]
+            hx, hy = hx % GRID_W, hy % GRID_H
+            cx, cy = hx * CELL_SIZE + CELL_SIZE // 2, hy * CELL_SIZE + CELL_SIZE // 2
+            if self.invincible_timer > 2.0 or int(self.invincible_timer * 6) % 2 == 0:  # flickers as it runs out
+                gfx.draw.circle(board, self.lucky_color(), (int(cx), int(cy)), int(CELL_SIZE * 1.1), width=3)
+        if self.warp_selecting:
+            self._draw_warp_select(board)
+        if self.warp_fx:
+            self._draw_warp_fx(board)
 
         self.particles.draw(board)
         self._draw_blackout(board, alpha)
@@ -3540,14 +4035,16 @@ class Game:
 
     def _draw_blackout(self, board: pygame.Surface, alpha: float) -> None:
         d = self.event_director
-        if not (d and d.active == EVENT_BLACKOUT and self.player_alive):
+        me = self._my_player_index()
+        mine = self.players[me]
+        if not (d and d.active == EVENT_BLACKOUT and mine is not None and self.players_alive[me]):
             return
         fade = max(0.0, min(1.0, EVENTS[EVENT_BLACKOUT].duration - d.remaining, d.remaining))  # 1s in, 1s out
         w, h = board.get_size()
         dark = gfx.surface((w, h), pygame.SRCALPHA)
         base = int(240 * fade)
         dark.fill((4, 6, 14, base))
-        hx, hy = self.player.render_positions(alpha)[0]
+        hx, hy = mine.render_positions(alpha)[0]
         hx, hy = hx % GRID_W, hy % GRID_H
         cx, cy = int(hx * CELL_SIZE + CELL_SIZE // 2), int(hy * CELL_SIZE + CELL_SIZE // 2)
         reach, steps = CELL_SIZE * 6, 16
@@ -3569,6 +4066,9 @@ class Game:
         if hz and hz.active:
             h = HAZARDS[hz.active]
             return h.name, h.color, hz.remaining, h.duration, False
+        if self.lan_role == "client" and self.net_hazard:  # the host's hazard, as last reported
+            h = HAZARDS[self.net_hazard[0]]
+            return h.name, h.color, self.net_hazard[1], h.duration, False
         return None
 
     def _draw_event_hud(self, board: pygame.Surface) -> None:
@@ -3764,6 +4264,13 @@ class Game:
                 screen.blit(font_tiny.render(f"{PLAYER_LABELS[i]}: {status}{extra}", True, color), (x, y))
                 y += 20
 
+        if self.invincible_timer > 0:
+            screen.blit(font_tiny.render(f"INVINCIBLE {self.invincible_timer:0.1f}s", True, self.lucky_color()), (x, y))
+            y += 20
+        if self.warp_timer > 0:
+            screen.blit(font_tiny.render(self._hint(f"TELEPORT: press Space  {self.warp_timer:0.1f}s"), True,
+                                         self.lucky_color()), (x, y))
+            y += 20
         if self.curse_timer > 0:
             screen.blit(font_tiny.render(f"CURSED: controls reversed! {self.curse_timer:0.1f}s", True, self.downerup_color(DOWNERUP_CURSE)), (x, y))
             y += 20
@@ -3810,6 +4317,7 @@ class Game:
             (self._draw_food_icon, FOOD_GOLDEN, "Golden (+50)"),
             (self._draw_downerup_icon, DOWNERUP_CURSE, "Curse (reversed!)"),
             (self._draw_downerup_icon, DOWNERUP_BOMB, "Bomb (danger!)"),
+            (self._draw_downerup_icon, DOWNERUP_SHRINK, "Mushroom (-2 length)"),
         ]
         for draw_fn, kind, label in legend:
             draw_fn(screen, kind, x + 6, y + 6, radius=6)
@@ -5094,12 +5602,6 @@ class Game:
                 (cx + radius * 0.55, cy - radius * 0.1), (cx + radius * 0.05, cy - radius * 0.1),
             ]
             gfx.draw.polygon(surface, color, bolt)
-        elif kind == FOOD_SHRINK:
-            neck = (cx - radius * 0.22, cy - radius * 1.1, radius * 0.44, radius * 0.5)
-            gfx.draw.rect(surface, color, neck)
-            gfx.draw.circle(surface, color, (cx, cy + int(radius * 0.15)), int(radius * 0.8))
-            gfx.draw.rect(surface, (255, 255, 255), neck, 1)
-            gfx.draw.circle(surface, (255, 255, 255), (cx, cy + int(radius * 0.15)), int(radius * 0.8), 1)
 
     @staticmethod
     def _star_points(cx: float, cy: float, outer: float, inner: float, n: int = 5) -> List[Tuple[float, float]]:
@@ -5120,7 +5622,140 @@ class Game:
         wave = now * 2.2 + phase
         return math.sin(wave) * 1.3, 1.0 + 0.06 * math.sin(wave * 1.15)
 
+    # ---------- Lucky Block Teleport: target picker and animation ----------
+
+    @staticmethod
+    def _cell_px(cell) -> Tuple[float, float]:
+        return (cell[0] + 0.5) * CELL_SIZE, (cell[1] + 0.5) * CELL_SIZE
+
+    def _warp_hides_snake(self) -> bool:
+        """The snake flickers out as it is pulled into the beam, stays gone until it lands, then pops back."""
+        fx = self.warp_fx
+        if not fx:
+            return False
+        land = WARP_FX_LAND * WARP_FX_SECONDS
+        t = fx["t"]
+        if t < land * 0.5:
+            return False
+        if t < land * 0.85:
+            return int(t * 50) % 2 == 0
+        return t < land + 0.05
+
+    def _draw_warp_select(self, board: pygame.Surface) -> None:
+        C = CELL_SIZE
+        now = pygame.time.get_ticks() / 1000.0
+        pulse = 0.5 + 0.5 * math.sin(now * 6)
+        gold = self.lucky_color()
+        ov = gfx.surface(board.get_size(), pygame.SRCALPHA)
+        ov.fill((6, 10, 18, 95))
+        cur = self.warp_list[self.warp_cursor]
+        hx, hy = self._cell_px(self.player.head)
+        cx, cy = self._cell_px((cur.x, cur.y))
+        dist = math.hypot(cx - hx, cy - hy)
+        dots = max(1, int(dist / 14))
+        for i in range(dots + 1):  # a dotted line from your head to the pick, marching toward it
+            f = ((i + now * 6) % (dots + 1)) / dots
+            gfx.draw.circle(ov, (*gold, 200), (int(hx + (cx - hx) * f), int(cy * f + hy * (1 - f))), 3)
+        for i, t in enumerate(self.warp_list):
+            if i != self.warp_cursor:
+                gfx.draw.circle(ov, (255, 255, 255, 150), (int((t.x + 0.5) * C), int((t.y + 0.5) * C)), int(C * 0.72), width=2)
+        gfx.draw.circle(ov, (*gold, 70), (int(cx), int(cy)), int(C * (1.25 + 0.2 * pulse)))
+        r, ln = C * (0.95 + 0.12 * pulse), C * 0.42
+        for sx in (-1, 1):  # four corner brackets around the pick
+            for sy in (-1, 1):
+                px, py = cx + sx * r, cy + sy * r
+                gfx.draw.line(ov, (255, 255, 255, 255), (px, py), (px - sx * ln, py), 3)
+                gfx.draw.line(ov, (255, 255, 255, 255), (px, py), (px, py - sy * ln), 3)
+        board.blit(ov, (0, 0))
+        text = self._hint(f"TELEPORT   Arrows: choose ({self.warp_cursor + 1}/{len(self.warp_list)})   "
+                          "Space: go   Esc: cancel")
+        label = font_small.render(text, True, gold)
+        pill = pygame.Rect(board.get_width() // 2 - (label.get_width() + 32) // 2, 6, label.get_width() + 32, 30)
+        gfx.draw.rect(board, (10, 12, 20), pill, border_radius=8)
+        gfx.draw.rect(board, gold, pill, width=2, border_radius=8)
+        board.blit(label, (pill.x + 16, pill.y + (pill.height - label.get_height()) // 2))
+
+    def _draw_warp_fx(self, board: pygame.Surface) -> None:
+        """The teleport animation. Phase 1: rings implode on the snake, its body is sucked into the head and a
+        beam shoots out toward the target. Phase 2: a flash, a pillar of light and shockwaves at the landing."""
+        fx = self.warp_fx
+        C = CELL_SIZE
+        t, total = fx["t"], WARP_FX_SECONDS
+        land = WARP_FX_LAND * total
+        gold, white, cyan = self.lucky_color(), (255, 255, 255), (92, 200, 255)
+        ease = lambda x: 1 - (1 - max(0.0, min(1.0, x))) ** 3
+        sx, sy = self._cell_px(fx["src"])
+        dx, dy = self._cell_px(fx["dest"])
+        W, H = board.get_size()
+        ov = gfx.surface((W, H), pygame.SRCALPHA)
+
+        def beam(width: int, alpha: int) -> None:
+            gfx.draw.line(ov, (*gold, alpha // 2), (sx, sy), (dx, dy), width * 2 + 4)
+            gfx.draw.line(ov, (*white, alpha), (sx, sy), (dx, dy), max(1, width))
+
+        if t < land:
+            p = t / land
+            for bx, by in fx["body"][1:]:  # the body streams into the head
+                x, y = self._cell_px((bx, by))
+                k = ease(p)
+                qx, qy = x + (sx - x) * k, y + (sy - y) * k
+                size = max(2, int(C * 0.8 * (1 - 0.7 * p)))
+                gfx.draw.line(ov, (*white, int(40 + 140 * p)), (x, y), (qx, qy), 2)
+                gfx.draw.rect(ov, (*gold, int(120 + 120 * p)), pygame.Rect(qx - size / 2, qy - size / 2, size, size),
+                              border_radius=3)
+            for i in range(3):  # rings imploding on the head
+                rp = max(0.0, min(1.0, p * 1.5 - i * 0.2))
+                if 0 < rp:
+                    gfx.draw.circle(ov, (*(white if i == 1 else gold), int(230 * min(1.0, rp * 2))), (int(sx), int(sy)),
+                                    int(C * (4.6 * (1 - rp) + 0.35)), width=3)
+            if p > 0.6:
+                q = (p - 0.6) / 0.4
+                beam(int(2 + 8 * q), int(200 * q))
+        else:
+            q = (t - land) / (total - land)
+            if q < 0.6:
+                beam(int(14 * (1 - q / 0.6)) + 1, int(255 * (1 - q / 0.6)))
+            pw = C * (2.4 * (1 - q) + 0.2)
+            gfx.draw.rect(ov, (*gold, int(130 * (1 - q))), pygame.Rect(dx - pw / 2, 0, pw, H))
+            gfx.draw.rect(ov, (*white, int(230 * (1 - q))), pygame.Rect(dx - pw * 0.18, 0, pw * 0.36, H))
+            fh = C * (0.5 * (1 - q) + 0.06)
+            gfx.draw.rect(ov, (*cyan, int(170 * (1 - q))), pygame.Rect(0, dy - fh / 2, W, fh))
+            for i, col in enumerate((white, gold, cyan)):  # shockwaves
+                rq = max(0.0, min(1.0, q * 1.5 - i * 0.18))
+                if 0 < rq < 1:
+                    gfx.draw.circle(ov, (*col, int(255 * (1 - rq))), (int(dx), int(dy)), int(C * (0.5 + 10 * ease(rq))),
+                                    width=max(1, int(6 * (1 - rq))))
+            for i in range(14):  # afterimages left along the beam
+                f = i / 13
+                a = int(210 * (1 - q) * (1 - f * 0.5))
+                if a > 0:
+                    gfx.draw.circle(ov, (*gold, a), (int(sx + (dx - sx) * f), int(sy + (dy - sy) * f)),
+                                    max(1, int(C * 0.35 * (1 - q))))
+        board.blit(ov, (0, 0))
+        f = max(0.0, 1.0 - abs(t - land) / 0.13)  # the white flash at the moment of the jump
+        if f > 0:
+            flash = gfx.surface((W, H), pygame.SRCALPHA)
+            flash.fill((255, 255, 255, int(200 * f)))
+            board.blit(flash, (0, 0))
+
+    def _draw_lucky_icon(self, surface: pygame.Surface, cx: float, cy: float, radius: float = 7) -> None:
+        if self._sprite_icon(surface, "lucky_block", cx, cy, radius):
+            return
+        color = self.lucky_color()
+        dark = tuple(int(c * 0.72) for c in color)
+        cx, cy = int(cx), int(cy)
+        r = int(radius * 1.05)
+        box = pygame.Rect(cx - r, cy - r, r * 2, r * 2)
+        gfx.draw.rect(surface, dark, box, border_radius=max(2, r // 3))
+        gfx.draw.rect(surface, color, box.inflate(-max(2, r // 3), -max(2, r // 3)).move(-max(1, r // 8), -max(1, r // 8)),
+                      border_radius=max(2, r // 4))
+        q = (font_small if radius >= 9 else font_tiny).render("?", True, (13, 15, 20))
+        surface.blit(q, (cx - q.get_width() // 2 - max(1, r // 8), cy - q.get_height() // 2 - max(1, r // 8)))
+
     def _draw_downerup_icon(self, surface: pygame.Surface, kind: str, cx: float, cy: float, radius: float = 7) -> None:
+        if kind == "lucky":  # the Lucky Block shares the downerup legend/how-to rows
+            self._draw_lucky_icon(surface, cx, cy, radius)
+            return
         if self._sprite_icon(surface, f"hz_{kind}", cx, cy, radius):
             return
         color = self.downerup_color(kind)
@@ -5142,6 +5777,12 @@ class Game:
             eye_r = max(1, int(radius * 0.13))
             gfx.draw.circle(surface, color, (cx - int(radius * 0.2), cy - int(radius * 0.22)), eye_r)
             gfx.draw.circle(surface, color, (cx + int(radius * 0.2), cy - int(radius * 0.22)), eye_r)
+        elif kind == DOWNERUP_SHRINK:
+            neck = (cx - radius * 0.22, cy - radius * 1.1, radius * 0.44, radius * 0.5)
+            gfx.draw.rect(surface, color, neck)
+            gfx.draw.circle(surface, color, (cx, cy + int(radius * 0.15)), int(radius * 0.8))
+            gfx.draw.rect(surface, (255, 255, 255), neck, 1)
+            gfx.draw.circle(surface, (255, 255, 255), (cx, cy + int(radius * 0.15)), int(radius * 0.8), 1)
 
     def _draw_powerup_icon(self, surface: pygame.Surface, kind: str, cx: float, cy: float, radius: float = 7) -> None:
         if self._sprite_icon(surface, POWERUP_SPRITES.get(kind, ""), cx, cy, radius):
@@ -5235,8 +5876,7 @@ class Game:
         foods = [
             (FOOD_NORMAL, "Food: +10 x combo, grow 1"),
             (FOOD_GOLDEN, "Golden: +50, grow 1"),
-            (FOOD_SPEED, "Speed: +10, 4s speed boost"),
-            (FOOD_SHRINK, "Shrink: lose 2 length, -5"),
+            (FOOD_SPEED, "Speed: +10, 3s mild speed boost"),
         ]
         for kind, desc in foods:
             self._draw_food_icon(screen, kind, left_x + 8, y + 8)
@@ -5248,6 +5888,8 @@ class Game:
         downerups = [
             (DOWNERUP_CURSE, "Curse (X): every move you make, you'll make in reverse, 4.5s"),
             (DOWNERUP_BOMB, "Bomb (ring): instant death unless shielded"),
+            (DOWNERUP_SHRINK, "Mushroom: lose 2 length, -5"),
+            ("lucky", "Lucky Block (?): very rare, a random effect"),
         ]
         for kind, desc in downerups:
             self._draw_downerup_icon(screen, kind, left_x + 8, y + 8)
@@ -5663,7 +6305,7 @@ class Game:
             if key == pygame.K_RETURN and channel and len(channel.roster) > 1:
                 self.sounds.play(self.sounds.menu_select)
                 match_size = len(channel.roster)
-                channel.send({"type": "start"})
+                channel.send({"type": "start", "ruleset": self.lan_ruleset_name})
                 self._lan_begin_session("host", match_size=match_size)
             elif key == pygame.K_ESCAPE:
                 self._lan_teardown()
@@ -5887,6 +6529,18 @@ class Game:
     def handle_playing_key(self, key) -> None:
         if self.lan_role != "client" and self.death_pause_timer > 0:
             return  # the run is over; don't let Esc -> Main Menu skip saving it
+        if self.arcade_mode == "Reversed":
+            tap = {pygame.K_UP: (0, -1), pygame.K_w: (0, -1), pygame.K_k: (0, -1),
+                   pygame.K_DOWN: (0, 1), pygame.K_s: (0, 1), pygame.K_j: (0, 1),
+                   pygame.K_LEFT: (-1, 0), pygame.K_a: (-1, 0), pygame.K_h: (-1, 0),
+                   pygame.K_RIGHT: (1, 0), pygame.K_d: (1, 0), pygame.K_l: (1, 0)}.get(key)
+            if tap:
+                self._reversed_taps.add(tap)  # counted at the next step even if released before it
+        if self.warp_fx:
+            return  # the teleport animation is playing
+        if self.warp_selecting:
+            self._warp_key(key)
+            return
         if self.lan_role == "client":
             d = None
             if key in (pygame.K_UP, pygame.K_w, pygame.K_k):
@@ -5898,7 +6552,10 @@ class Game:
             elif key in (pygame.K_RIGHT, pygame.K_d, pygame.K_l):
                 d = (1, 0)
             if d and self.lan_link:
-                self.lan_link.send({"type": "input", "dir": list(d)})
+                if self.arcade_mode == "Reversed":  # an apple steers by what you hold, not by turns
+                    self._client_send_hold(tap=d)
+                else:
+                    self.lan_link.send({"type": "input", "dir": list(d)})
             if key == pygame.K_ESCAPE:
                 if self.lan_link:
                     self.lan_link.send({"type": "client_left"})
@@ -5933,7 +6590,10 @@ class Game:
             if d is not None:
                 self._p1_set_direction(d)
                 self.move_accum = 0.0
-                self._tick()
+                self._tick(only="p1")
+                if is_lan_host:
+                    self.tick_count += 1
+                    self._send_snapshot()
         elif cfg["coop"]:
             # hjkl are vim-style alternates for Player 1's arrows (not WASD,
             # which is already Player 2's local-coop control scheme).
@@ -5974,7 +6634,10 @@ class Game:
             else:
                 self.state = STATE_MENU
         elif key == pygame.K_SPACE:
-            self._try_dash()
+            if self.warp_timer > 0:
+                self._warp_begin()
+            else:
+                self._try_dash()
         elif key == pygame.K_m:
             self.sounds.muted = not self.sounds.muted
             self.save_settings()
@@ -6271,6 +6934,8 @@ class Game:
                                     else (pygame.K_DOWN if new > 0 else pygame.K_UP))
 
     def handle_event(self, event: pygame.event.Event) -> None:
+        if self.dev and self.dev.handle_event(event):
+            return
         if event.type == pygame.MOUSEBUTTONDOWN:
             self.pad_active = False
         if event.type in (pygame.CONTROLLERDEVICEADDED, pygame.CONTROLLERDEVICEREMOVED,
@@ -6383,6 +7048,8 @@ class Game:
 
     def _frame(self, dt: float) -> None:
         dt = min(dt, 0.05)
+        if self.dev:
+            dt = self.dev.adjust_dt(dt)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -6507,6 +7174,8 @@ class Game:
         if self.settings["show_fps"]:
             fps = font_tiny.render(f"{clock.get_fps():.0f} FPS", True, TEXT_DIM)
             screen.blit(fps, (SCREEN_W - fps.get_width() - 8, SCREEN_H - fps.get_height() - 4))
+        if self.dev:
+            self.dev.draw(screen)
         self._draw_cursor(dt)
         display.fill(BG)  # letterbox bars blend into the background
         display.blit(screen, canvas_offset)

@@ -81,6 +81,17 @@ the middle. Menacing but simple."
 *In game:* the bomb kills you without a shield; the curse reverses your controls. They should look like
 **danger** next to the friendly foods.
 
+### `lucky_block.png`: the Lucky Block (a single icon)
+"One square mystery block centred on a flat magenta background with a wide magenta margin: a rounded
+amber (#FFC857) cube seen straight on, with one darker amber tone on its bottom and right edges for a single
+clean shadow side, and a bold off-white (#EEF2F7) question mark cut cleanly into the middle. A thin inset
+square frame in the darker amber just inside the edge. Friendly, inviting and a little special, but still
+calm and flat like the rest of the set. Do not copy any existing game's lucky block."
+*In game:* a very rare pickup that sits on the board for ~14 seconds and gives a random effect (good or
+bad). It must read as a gold "?" **box** at 24 px and look clearly different from the round power-up
+badges, the golden star apple, and the dark bomb. Write the source file as `assets/source/lucky_block.png`
+(use the amber/gold, never magenta or pink).
+
 ### `wall_tile.png`: maze walls
 "One square top-down stone block filling the whole square on flat magenta with a small magenta margin:
 deep teal (#123A44) with a slightly lighter bevel on the top and left edges and one short thin crack.

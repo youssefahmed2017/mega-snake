@@ -15,7 +15,7 @@ class PlayerSnake:
         self.body: Deque[Tuple[int, int]] = deque([(x, y), (x - 1, y), (x - 2, y)])
         self.prev_body: List[Tuple[int, int]] = list(self.body)
         self.direction = (1, 0)
-        self.pending_direction = (1, 0)
+        self.queued: Deque[Tuple[int, int]] = deque()  # turns pressed but not yet taken, oldest first
         self.grow_pending = 0
         self.tail_pop_anim = 999.0  # seconds since the tail last grew; big = no pop animation playing
         self.turn_anim = 999.0  # seconds since the head last changed direction; big = no squash playing
@@ -25,19 +25,31 @@ class PlayerSnake:
         return self.body[0]
 
     def set_direction(self, d: Tuple[int, int]) -> None:
-        # Prevent reversing directly into the snake's own neck.
-        if (d[0] == -self.direction[0] and d[1] == -self.direction[1]) and len(self.body) > 1:
+        """Queue a turn. Presses are kept (a few deep) and taken one per step, so two keys hit
+        inside one tick (Up then Left) both count instead of the second overwriting the first.
+        Each is checked against the heading it will follow, so it can't reverse into the neck."""
+        last = self.queued[-1] if self.queued else self.direction
+        if d == last:
             return
-        self.pending_direction = d
+        if d[0] == -last[0] and d[1] == -last[1] and len(self.body) > 1:
+            return
+        if len(self.queued) >= 3:
+            self.queued.popleft()
+        self.queued.append(d)
 
-    def step(self, wrap: bool) -> Tuple[int, int]:
+    def clear_queue(self) -> None:
+        self.queued.clear()
+
+    def step(self, wrap: bool, override: Optional[Tuple[int, int]] = None) -> Tuple[int, int]:
+        """`override` moves along another vector for this one step (a diagonal) without touching the heading."""
         self.prev_body = list(self.body)
         old_direction = self.direction
-        self.direction = self.pending_direction
+        if self.queued:
+            self.direction = self.queued.popleft()
         if self.direction != old_direction:
             self.turn_anim = 0.0
         hx, hy = self.head
-        dx, dy = self.direction
+        dx, dy = override or self.direction
         nx, ny = hx + dx, hy + dy
 
         if wrap:
