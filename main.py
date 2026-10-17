@@ -48,7 +48,7 @@ from constants import (
     RESUME_COUNTDOWN_STEPS, RESUME_COUNTDOWN_STEP_SECONDS, METEOR_WARN_SECONDS, REPO_URL, SUPPORT_URL,
     GAME_VERSION, MIN_MULTIPLAYER_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
     REVERSED_GRAVE_SECONDS, REVERSED_EAT_GROWTH, LAN_RULESETS, LAN_RULESET_NAMES, MAPS, MAP_NAMES, MAP_THEMES, DEFAULT_THEME,
-    EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS, ONLINE_SERVER_URL, MUSTACHE_CODE,
+    EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS, ONLINE_SERVER_URL, MUSTACHE_CODE, DISCORD_CLIENT_ID,
 )
 from snake import PlayerSnake
 from enemy import EnemySnake
@@ -64,6 +64,7 @@ from achievements import ACHIEVEMENTS, ACHIEVEMENTS_BY_ID, AchievementTracker
 from audio import SoundBank
 import persistence
 import network
+from discord_presence import DiscordPresence
 import updater
 from build_info import STORE as _STORE, DEV
 
@@ -615,6 +616,13 @@ class Game:
             from devconsole import DevConsole
             self.dev = DevConsole(self)
 
+        self.presence: Optional[DiscordPresence] = None
+        if DISCORD_CLIENT_ID:
+            self.presence = DiscordPresence(DISCORD_CLIENT_ID)
+            self.presence.set_enabled(bool(self.settings["discord_status"]))
+        self.presence_timer = 0.0
+        self.presence_run_start: Optional[int] = None  # unix time the current run began, for "12:34 elapsed"
+
     # ---------- helpers ----------
 
     def mode_name(self) -> str:
@@ -692,6 +700,8 @@ class Game:
                 self.particles.density = PARTICLE_DENSITY.get(value, 1.0)
             elif key == "resolution":
                 self._apply_display()
+            elif key == "discord_status" and self.presence:
+                self.presence.set_enabled(bool(value))
         self._unlock("tinkerer")
         if save:
             self.save_settings()
@@ -7046,6 +7056,33 @@ class Game:
         while True:
             self._frame(clock.tick(FPS) / 1000.0)
 
+    def _update_presence(self) -> None:
+        """Tell Discord what the player is doing. Runs once a second; DiscordPresence only
+        sends what changed, so a ticking score doesn't trip Discord's rate limit."""
+        in_run = self.state in (STATE_PLAYING, STATE_PAUSED, STATE_PERK_PICK)
+        if in_run and self.presence_run_start is None:
+            self.presence_run_start = int(time.time())
+        elif not in_run:
+            self.presence_run_start = None
+
+        mode = self.mode_name()
+        who = {"host": " (hosting multiplayer)", "client": " (multiplayer)"}.get(self.lan_role or "", "")
+        if in_run:
+            details = f"Playing {mode}{who}"
+            state = f"Score: {self.score}" + ("  -  Paused" if self.state == STATE_PAUSED else "")
+        elif self.state in (STATE_GAME_OVER, STATE_ENTER_INITIALS, STATE_ARCADE_RESULT):
+            details, state = f"Game over in {mode}{who}", f"Final score: {self.score}"
+        elif self.state in (STATE_LAN_MENU, STATE_LAN_SETUP, STATE_LAN_HOST_WAIT, STATE_LAN_JOIN_IP,
+                            STATE_LAN_CONNECTING, STATE_ONLINE_JOIN_CODE, STATE_MAP_SELECT):
+            details, state = "In the multiplayer lobby", "Up to 4 players"
+        elif self.state in (STATE_SHOP, STATE_SECRET_SHOP):
+            details, state = "Browsing the shop", None
+        else:
+            details, state = "In the menus", None
+        self.presence.set(details, state, start=self.presence_run_start,
+                          large_text=f"MEGA SNAKE v{GAME_VERSION} - snake, but with way too many features",
+                          buttons=[{"label": "Get MEGA SNAKE", "url": REPO_URL}])
+
     def _frame(self, dt: float) -> None:
         dt = min(dt, 0.05)
         if self.dev:
@@ -7056,6 +7093,11 @@ class Game:
                 pygame.quit()
                 sys.exit(0)
             self.handle_event(event)
+
+        self.presence_timer -= dt
+        if self.presence and self.presence_timer <= 0:
+            self.presence_timer = 1.0
+            self._update_presence()
 
         if self.state == STATE_UPDATE_CHECK:
             self._poll_update_check(dt)

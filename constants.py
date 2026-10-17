@@ -503,6 +503,12 @@ SECRET_SHOP_ITEMS = [
 
 GAME_VERSION = "3.4.0"
 
+# Discord Rich Presence (discord_presence.py). The Application ID from discord.com/developers ->
+# Applications -> MEGA SNAKE -> General Information; the app's name is what Discord shows after
+# "Playing". Upload the game's logo under Rich Presence -> Art Assets with the key "logo".
+# Empty = Rich Presence is off.
+DISCORD_CLIENT_ID = ""
+
 # Oldest version that may play multiplayer with this one. Different versions inside the
 # range play together; anything older is turned away. Raise it only when the network
 # protocol changes in a way old builds can't follow, and mirror it in server/src/index.js.

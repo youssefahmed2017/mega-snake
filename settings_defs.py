@@ -41,6 +41,8 @@ SETTING_DEFS: List[SettingDef] = [
                hint="The COMBO x5! / NEW PERSONAL BEST banners."),
     SettingDef("show_ghost", "Ghost Replay", "Gameplay", "toggle", True,
                hint="Show your best run for this mode as a faint ghost."),
+    SettingDef("discord_status", "Discord Status", "Gameplay", "toggle", True,
+               hint="Show what you're playing (mode, score) on your Discord profile."),
     # Display
     SettingDef("resolution", "Resolution", "Display", "choice", "1080p",
                options=("144p", "360p", "480p", "720p", "1080p", "4K"),

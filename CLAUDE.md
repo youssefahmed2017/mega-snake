@@ -57,6 +57,12 @@ LAN host (`_lan_host_poll`) and the relay turn away anything older. Builds insid
 a failed auto-update doesn't lock anyone out. Raise the minimum only when the `network.py`/relay wire protocol
 changes in a way old builds can't follow, and redeploy the relay (`npm run deploy`) when you do.
 
+### Discord Rich Presence — `discord_presence.py`
+Talks to the local Discord client over its IPC socket/named pipe (no pip dependency) on a daemon thread.
+`Game._update_presence` runs once a second and describes the current state; the module only sends changes,
+at most every 4s (Discord's rate limit). Off while `DISCORD_CLIENT_ID` in `constants.py` is empty, and per
+player via the "Discord Status" setting. The image key `logo` must exist in the Discord app's Art Assets.
+
 ### Rendering and resolution — `gfx.py`
 All layout code is in *logical* units (the 1028x578 canvas); never use raw `pygame.draw`, `pygame.Surface(...)`,
 `pygame.font.Font` or `pygame.mouse.get_pos()` in game/UI code. Use `gfx.draw.*`, `gfx.surface()`, `gfx.Font`
