@@ -212,6 +212,41 @@ if _src_icon is not None:
     _app_icon = pygame.transform.smoothscale(_crop, (128, 128))
     pygame.display.set_icon(_app_icon)
 
+
+def _install_linux_launcher() -> None:
+    """Put the packaged Linux build in the app menu (~/.local/share/applications). KDE and
+    friends ask "are you sure you want to run this program?" every time a bare executable
+    is opened from the file manager, but never for an app started from the menu - so after
+    the first launch players start it from there, prompt-free. Rewritten only when it
+    changed, e.g. when the binary was moved; from source this is a no-op."""
+    if not (updater.is_frozen() and sys.platform.startswith("linux")):
+        return
+    exe = os.environ.get("APPIMAGE") or sys.executable  # an AppImage runs from a temp mount
+    slug = "megasnake-dev" if DEV else "megasnake"
+    data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+    icon = data / "icons/hicolor/128x128/apps" / f"{slug}.png"
+    entry = data / "applications" / f"{slug}.desktop"
+    # Exec quoting escapes " ` $ \ with a backslash, and the .desktop string rules then
+    # double every backslash again (so \$ is written \\$); % is the field-code escape.
+    escaped = "".join("\\" + c if c in '"`$\\' else c for c in exe)
+    quoted = '"' + escaped.replace("\\", "\\\\").replace("%", "%%") + '"'
+    text = ("[Desktop Entry]\nType=Application\n"
+            f"Name={'MEGA SNAKE [DEV]' if DEV else 'MEGA SNAKE'}\n"
+            "Comment=Snake, but with way too many features\n"
+            f"Exec={quoted}\nIcon={slug}\nTerminal=false\nCategories=Game;ArcadeGame;\n")
+    try:
+        if "_app_icon" in globals() and not icon.exists():
+            icon.parent.mkdir(parents=True, exist_ok=True)
+            pygame.image.save(_app_icon, str(icon))
+        if not entry.exists() or entry.read_text() != text:
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            entry.write_text(text)
+    except OSError:
+        pass  # read-only home or similar - the game itself runs fine without a menu entry
+
+
+_install_linux_launcher()
+
 _icon_font_cache: Dict[int, gfx.Font] = {}
 
 
