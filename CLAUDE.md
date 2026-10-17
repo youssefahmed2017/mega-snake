@@ -34,6 +34,9 @@ pip install pyinstaller
 pyinstaller --onefile --windowed --icon assets/icon.ico --collect-data certifi --add-data "assets/fonts:assets/fonts" --add-data "assets/art:assets/art" --name MegaSnake main.py   # use ';' not ':' on Windows; --icon assets/icon.icns on macOS
 ```
 
+On Windows, CI also runs `python tools/make_version_file.py` and passes `--version-file version_info.txt`, which
+gives the .exe its name/publisher/version in Task Manager and Properties (the version comes from `GAME_VERSION`).
+
 ## License
 
 GPL-3.0-only (`LICENSE`). Every `.py` / `.js` file starts with the two-line copyright + `SPDX-License-Identifier:

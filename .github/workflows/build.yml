@@ -15,7 +15,7 @@ jobs:
           - os: windows-latest
             artifact_name: MegaSnake-Windows
             output_path: dist/MegaSnake.exe
-            pyinstaller_args: --onefile --windowed --add-data "assets/fonts;assets/fonts" --add-data "assets/art;assets/art"
+            pyinstaller_args: --onefile --windowed --add-data "assets/fonts;assets/fonts" --add-data "assets/art;assets/art" --version-file version_info.txt
           - os: macos-latest
             artifact_name: MegaSnake-macOS
             output_path: dist/MegaSnake.app.zip
@@ -44,6 +44,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libsdl2-2.0-0 libsdl2-image-2.0-0 libsdl2-mixer-2.0-0 libsdl2-ttf-2.0-0
+
+      - name: Write the exe's version info (Windows)
+        if: matrix.os == 'windows-latest'
+        run: python tools/make_version_file.py
 
       - name: Build with PyInstaller
         run: pyinstaller ${{ matrix.pyinstaller_args }} --collect-data certifi --name MegaSnake main.py

@@ -5,3 +5,4 @@ dist/
 *.spec
 .vercel/
 .vercel
+version_info.txt

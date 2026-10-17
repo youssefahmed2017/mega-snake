@@ -31,7 +31,7 @@ jobs:
           - os: windows-latest
             channel: windows
             output: dist/MegaSnake.exe
-            pyinstaller_args: --onefile --windowed --add-data "assets/fonts;assets/fonts" --add-data "assets/art;assets/art"
+            pyinstaller_args: --onefile --windowed --add-data "assets/fonts;assets/fonts" --add-data "assets/art;assets/art" --version-file version_info.txt
           - os: macos-latest
             channel: osx
             output: dist/MegaSnake.app
@@ -66,6 +66,10 @@ jobs:
 
       - name: Mark this build as the itch.io flavour (auto-updater off)
         run: printf 'STORE = "itch"\n' > build_info.py
+
+      - name: Write the exe's version info (Windows)
+        if: matrix.os == 'windows-latest'
+        run: python tools/make_version_file.py
 
       - name: Build with PyInstaller
         run: pyinstaller ${{ matrix.pyinstaller_args }} --collect-data certifi --name MegaSnake main.py
