@@ -516,6 +516,7 @@ MIN_MULTIPLAYER_VERSION = "3.4.0"
 
 # Links shown (and clickable) on the main menu.
 REPO_URL = "https://github.com/youssefahmed2017/mega-snake"
+WEBSITE_URL = "https://mega-snake-game.vercel.app"  # the Discord status's "Get MEGA SNAKE" button
 SUPPORT_URL = "https://ko-fi.com/youssefahmedabdou"
 
 # Online multiplayer relay (server/ in this repo, a Cloudflare Worker),

@@ -48,7 +48,7 @@ from constants import (
     RESUME_COUNTDOWN_STEPS, RESUME_COUNTDOWN_STEP_SECONDS, METEOR_WARN_SECONDS, REPO_URL, SUPPORT_URL,
     GAME_VERSION, MIN_MULTIPLAYER_VERSION, CHANGELOG, COLORBLIND_FOOD_COLORS, COLORBLIND_POWERUP_COLORS, GHOST_MAX_TICKS,
     REVERSED_GRAVE_SECONDS, REVERSED_EAT_GROWTH, LAN_RULESETS, LAN_RULESET_NAMES, MAPS, MAP_NAMES, MAP_THEMES, DEFAULT_THEME,
-    EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS, ONLINE_SERVER_URL, MUSTACHE_CODE, DISCORD_CLIENT_ID,
+    EASTER_EXTRA_PRESSES, EASTER_WARNINGS, SECRET_SHOP_ITEMS, ONLINE_SERVER_URL, MUSTACHE_CODE, DISCORD_CLIENT_ID, WEBSITE_URL,
 )
 from snake import PlayerSnake
 from enemy import EnemySnake
@@ -7116,7 +7116,7 @@ class Game:
             details, state = "In the menus", None
         self.presence.set(details, state, start=self.presence_run_start,
                           large_text=f"MEGA SNAKE v{GAME_VERSION} - snake, but with way too many features",
-                          buttons=[{"label": "Get MEGA SNAKE", "url": REPO_URL}])
+                          buttons=[{"label": "Get MEGA SNAKE", "url": WEBSITE_URL}])
 
     def _frame(self, dt: float) -> None:
         dt = min(dt, 0.05)
