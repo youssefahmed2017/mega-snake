@@ -507,7 +507,7 @@ GAME_VERSION = "3.4.0"
 # Applications -> MEGA SNAKE -> General Information; the app's name is what Discord shows after
 # "Playing". Upload the game's logo under Rich Presence -> Art Assets with the key "logo".
 # Empty = Rich Presence is off.
-DISCORD_CLIENT_ID = ""
+DISCORD_CLIENT_ID = "1561045914884374528"
 
 # Oldest version that may play multiplayer with this one. Different versions inside the
 # range play together; anything older is turned away. Raise it only when the network
